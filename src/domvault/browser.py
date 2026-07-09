@@ -30,8 +30,7 @@ BrowserKind = Literal["chromium", "firefox", "webkit"]
 # uvicorn runs. We never touch Playwright from another thread.
 @dataclass
 class _Session:
-    pw_ctx: object = None          # Playwright context manager (async_playwright().__enter__ result)
-    pw_stop: object = None         # the stop() coroutine to call on teardown
+    pw: object = None              # Playwright instance from async_playwright().start(); stop via .stop()
     browser: Optional[Browser] = None
     context: Optional[BrowserContext] = None
     page: Optional[Page] = None
@@ -79,7 +78,7 @@ async def _ensure_started(kind: BrowserKind) -> None:
         pw = await async_playwright().start()
     except PlaywrightError as exc:  # pragma: no cover - environment error
         raise BrowserError(f"Could not start Playwright: {exc}") from exc
-    _session.pw_stop = pw
+    _session.pw = pw
     _session.kind = kind
     try:
         launcher = getattr(pw, kind)
@@ -112,16 +111,15 @@ async def _hard_stop() -> None:
             await _session.browser.close()
         except PlaywrightError:
             pass
-    if _session.pw_stop is not None:
+    if _session.pw is not None:
         try:
-            await _session.pw_stop()
+            await _session.pw.stop()
         except PlaywrightError:
             pass
     _session.browser = None
     _session.context = None
     _session.page = None
-    _session.pw_stop = None
-    _session.pw_ctx = None
+    _session.pw = None
 
 
 async def open_url(url: str, kind: BrowserKind = "chromium") -> dict:

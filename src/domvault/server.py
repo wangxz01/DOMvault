@@ -83,7 +83,7 @@ async def api_open(payload: OpenRequest) -> JSONResponse:
 
 
 @app.post("/api/save")
-async def api_save(_payload: SaveRequest) -> JSONResponse:
+async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
     try:
         html = await browser.current_html()
         url = await browser.current_url()

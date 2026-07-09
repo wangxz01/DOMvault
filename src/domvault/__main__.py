@@ -17,7 +17,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="domvault",
         description=(
-            "DOMVault — a lightweight local Playwright tool for capturing the "
+            "DOMVault - a lightweight local Playwright tool for capturing the "
             "current rendered HTML of a web page. Starts a local web control "
             "panel at http://127.0.0.1:8000 by default."
         ),
