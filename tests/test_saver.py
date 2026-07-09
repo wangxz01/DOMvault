@@ -1,26 +1,30 @@
-"""Unit tests for saver.py — URL normalization, naming, and file writing.
+"""Unit tests for saver.py — URL normalization, naming, and snapshot writing.
 
-These tests need only the standard library; they do not launch a browser.
+Standard library only; no browser is launched.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 from pathlib import Path
 
 import pytest
 
 from domvault.saver import (
     InvalidURL,
-    build_filename,
+    build_metadata,
     domain_slug,
     normalize_url,
-    resolve_unique_path,
-    save_html,
+    resolve_unique_run_dir,
+    run_directory_name,
+    sanitize_custom_name,
+    save_snapshot,
+    timestamp,
 )
 
 
-# --- normalize_url --------------------------------------------------------
+# --- normalize_url -------------------------------------------------------
 
 class TestNormalizeURL:
     def test_adds_https_scheme(self):
@@ -59,7 +63,7 @@ class TestNormalizeURL:
             normalize_url("https:///path-only")
 
 
-# --- domain_slug ----------------------------------------------------------
+# --- domain_slug ---------------------------------------------------------
 
 class TestDomainSlug:
     def test_simple_domain(self):
@@ -82,76 +86,187 @@ class TestDomainSlug:
         assert domain_slug("https://user:pass@example.com") == "example.com"
 
     def test_unknown_host_fallback(self):
-        # No netloc -> urlparse still returns what it can; saver falls back.
         assert domain_slug("about:blank") == "unknown"
 
 
-# --- build_filename -------------------------------------------------------
+# --- timestamp + sanitize_custom_name ------------------------------------
 
-class TestBuildFilename:
-    def test_basic_shape(self):
-        name = build_filename("https://example.com", when=datetime.datetime(2026, 7, 9, 21, 30, 0))
-        assert name == "example.com_20260709_213000.html"
-
-    def test_uses_domain_slug(self):
-        name = build_filename("https://Example.COM:8443/x", when=datetime.datetime(2026, 1, 1, 0, 0, 0))
-        assert name == "example.com-8443_20260101_000000.html"
-
-    def test_extension_is_html(self):
-        name = build_filename("https://example.com")
-        assert name.endswith(".html")
+class TestTimestamp:
+    def test_format(self):
+        assert timestamp(datetime.datetime(2026, 7, 9, 21, 30, 0)) == "20260709_213000"
 
 
-# --- resolve_unique_path --------------------------------------------------
+class TestSanitizeCustomName:
+    def test_passthrough_safe(self):
+        assert sanitize_custom_name("my-snapshot.1") == "my-snapshot.1"
 
-class TestResolveUniquePath:
-    def test_creates_directory(self, tmp_path: Path):
-        out = tmp_path / "saved_html"
-        path = resolve_unique_path(out, "example.com_20260709_213000.html")
-        assert out.exists()
-        assert path.parent == out
-        assert path.name == "example.com_20260709_213000.html"
+    def test_replaces_unsafe(self):
+        assert sanitize_custom_name("hello world/foo") == "hello_world_foo"
+
+    def test_collapses_underscores(self):
+        assert sanitize_custom_name("a   b???c") == "a_b_c"
+
+    def test_trims_leading_trailing(self):
+        assert sanitize_custom_name("...name___") == "name"
+
+    def test_empty_or_whitespace(self):
+        assert sanitize_custom_name("") == ""
+        assert sanitize_custom_name("   ") == ""
+
+    def test_caps_length(self):
+        assert len(sanitize_custom_name("x" * 200)) == 80
+
+
+# --- run_directory_name --------------------------------------------------
+
+class TestRunDirectoryName:
+    def test_default_uses_domain_and_timestamp(self):
+        name = run_directory_name(
+            "https://example.com",
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert name == "example.com_20260709_213000"
+
+    def test_custom_name_used_when_provided(self):
+        name = run_directory_name(
+            "https://example.com",
+            custom_name="login-state",
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert name == "login-state"
+
+    def test_custom_name_sanitized(self):
+        name = run_directory_name(
+            "https://example.com",
+            custom_name="My Snapshot!!",
+        )
+        assert name == "My_Snapshot"
+
+    def test_empty_custom_falls_back_to_default(self):
+        name = run_directory_name(
+            "https://example.com",
+            custom_name="   ",
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert name == "example.com_20260709_213000"
+
+
+# --- resolve_unique_run_dir ----------------------------------------------
+
+class TestResolveUniqueRunDir:
+    def test_creates_base_and_dir(self, tmp_path: Path):
+        base = tmp_path / "saved_html"
+        d = resolve_unique_run_dir(base, "example.com_20260709_213000")
+        assert base.exists()
+        assert d.is_dir()
+        assert d.name == "example.com_20260709_213000"
 
     def test_collision_gets_suffix(self, tmp_path: Path):
-        first = resolve_unique_path(tmp_path, "x.html")
-        first.write_text("a", encoding="utf-8")
-        second = resolve_unique_path(tmp_path, "x.html")
-        assert second.name == "x_2.html"
+        first = resolve_unique_run_dir(tmp_path, "x")
+        second = resolve_unique_run_dir(tmp_path, "x")
+        assert first.name == "x"
+        assert second.name == "x_2"
 
     def test_collision_increments(self, tmp_path: Path):
-        for expected in ("x.html", "x_2.html", "x_3.html"):
-            p = resolve_unique_path(tmp_path, "x.html")
-            assert p.name == expected
-            p.write_text("a", encoding="utf-8")
+        names = [resolve_unique_run_dir(tmp_path, "x").name for _ in range(4)]
+        assert names == ["x", "x_2", "x_3", "x_4"]
 
 
-# --- save_html ------------------------------------------------------------
+# --- build_metadata ------------------------------------------------------
 
-class TestSaveHTML:
-    def test_writes_file_and_returns_path(self, tmp_path: Path):
-        path = save_html("<html></html>", "https://example.com", tmp_path,
-                         when=datetime.datetime(2026, 7, 9, 21, 30, 0))
-        assert path.exists()
-        assert path.name == "example.com_20260709_213000.html"
-        assert path.read_text(encoding="utf-8") == "<html></html>"
+class TestBuildMetadata:
+    def test_minimal_no_artifacts(self):
+        m = build_metadata(
+            url="https://example.com",
+            title="Example",
+            run_name="example.com_20260709_213000",
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert m["html_file"] == "page.html"
+        assert m["screenshot_file"] is None
+        assert m["storage_state_file"] is None
+        assert m["url"] == "https://example.com"
+        assert m["title"] == "Example"
+        assert m["saved_at"] == "2026-07-09T21:30:00"
+        assert m["tool"] == "DOMVault"
 
-    def test_creates_output_dir(self, tmp_path: Path):
-        out = tmp_path / "nested" / "saved_html"
-        path = save_html("<p>hi</p>", "https://example.com", out)
-        assert path.exists()
-        assert out.exists()
+    def test_with_artifacts(self):
+        m = build_metadata(
+            url="u", title="t", run_name="r",
+            has_screenshot=True, has_storage_state=True,
+        )
+        assert m["screenshot_file"] == "screenshot.png"
+        assert m["storage_state_file"] == "storage_state.json"
+
+
+# --- save_snapshot -------------------------------------------------------
+
+class TestSaveSnapshot:
+    def test_writes_page_and_metadata_only(self, tmp_path: Path):
+        run_dir, meta = save_snapshot(
+            "<html></html>",
+            url="https://example.com",
+            title="Example",
+            out_dir=tmp_path,
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert run_dir.name == "example.com_20260709_213000"
+        assert (run_dir / "page.html").read_text(encoding="utf-8") == "<html></html>"
+        assert (run_dir / "metadata.json").is_file()
+        assert not (run_dir / "screenshot.png").exists()
+        assert not (run_dir / "storage_state.json").exists()
+        assert meta["html_file"] == "page.html"
+        assert meta["screenshot_file"] is None
+
+    def test_writes_all_artifacts(self, tmp_path: Path):
+        run_dir, _ = save_snapshot(
+            "<html></html>",
+            url="https://example.com",
+            title="Example",
+            out_dir=tmp_path,
+            screenshot_png=b"\x89PNG\r\n\x1a\n",
+            storage_state={"cookies": [], "origins": []},
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert (run_dir / "page.html").is_file()
+        assert (run_dir / "screenshot.png").read_bytes() == b"\x89PNG\r\n\x1a\n"
+        state = json.loads((run_dir / "storage_state.json").read_text(encoding="utf-8"))
+        assert state == {"cookies": [], "origins": []}
+
+    def test_metadata_json_is_valid(self, tmp_path: Path):
+        run_dir, _ = save_snapshot(
+            "<html></html>",
+            url="https://example.com/x?q=1",
+            title="T",
+            out_dir=tmp_path,
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        m = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+        assert m["url"] == "https://example.com/x?q=1"
+        assert m["run_dir"] == run_dir.name
+
+    def test_custom_name_used_for_dir(self, tmp_path: Path):
+        run_dir, _ = save_snapshot(
+            "<html></html>",
+            url="https://example.com",
+            title="Example",
+            out_dir=tmp_path,
+            custom_name="my-login",
+        )
+        assert run_dir.name == "my-login"
 
     def test_repeated_saves_dont_overwrite(self, tmp_path: Path):
         when = datetime.datetime(2026, 7, 9, 21, 30, 0)
-        p1 = save_html("<a/>", "https://example.com", tmp_path, when=when)
-        p2 = save_html("<b/>", "https://example.com", tmp_path, when=when)
-        p3 = save_html("<c/>", "https://example.com", tmp_path, when=when)
-        names = sorted({p1.name, p2.name, p3.name})
+        d1, _ = save_snapshot("<a/>", url="https://example.com", title="t", out_dir=tmp_path, when=when)
+        d2, _ = save_snapshot("<b/>", url="https://example.com", title="t", out_dir=tmp_path, when=when)
+        d3, _ = save_snapshot("<c/>", url="https://example.com", title="t", out_dir=tmp_path, when=when)
+        names = sorted({d1.name, d2.name, d3.name})
         assert len(names) == 3
-        assert all(path.exists() for path in (p1, p2, p3))
-        # Original content preserved.
-        assert p1.read_text(encoding="utf-8") == "<a/>"
+        assert (d1 / "page.html").read_text(encoding="utf-8") == "<a/>"
 
     def test_rejects_none_html(self, tmp_path: Path):
         with pytest.raises(ValueError):
-            save_html(None, "https://example.com", tmp_path)  # type: ignore[arg-type]
+            save_snapshot(
+                None,  # type: ignore[arg-type]
+                url="https://example.com", title="t", out_dir=tmp_path,
+            )

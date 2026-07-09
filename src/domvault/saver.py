@@ -1,21 +1,37 @@
-"""HTML saving logic: URL normalization, filename generation, and file writing.
+"""Snapshot saving: URL normalization, directory naming, and artifact writing.
 
-This module is pure (no Playwright dependency) so it can be unit-tested in
-isolation. The actual ``page.content()`` call happens in ``browser.py`` /
-``server.py``; this module only handles the string and the filesystem.
+Pure module (no Playwright dependency) so it can be unit-tested in isolation.
+The actual ``page.content()`` / screenshot / storage-state calls happen in
+``browser.py`` / ``server.py``; this module handles strings and the filesystem.
+
+V0.2 layout — each save produces an independent directory::
+
+    saved_html/
+      example.com_20260709_213000/
+        page.html
+        screenshot.png
+        storage_state.json
+        metadata.json
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import urlparse
+
+TOOL = "DOMVault"
+VERSION = "0.2.0"
 
 
 class InvalidURL(ValueError):
     """Raised when a URL cannot be normalized to a valid http(s) URL."""
 
+
+# --- URL handling --------------------------------------------------------
 
 def normalize_url(raw: str) -> str:
     """Return a usable absolute URL.
@@ -24,8 +40,6 @@ def normalize_url(raw: str) -> str:
     - Prepends ``https://`` if no scheme is present.
     - Accepts only ``http`` and ``https`` schemes.
     - Requires a non-empty host.
-
-    Raises :class:`InvalidURL` otherwise.
     """
     if raw is None:
         raise InvalidURL("URL is required.")
@@ -35,9 +49,7 @@ def normalize_url(raw: str) -> str:
 
     has_scheme = "://" in text or text.lower().startswith(("http://", "https://"))
     if not has_scheme:
-        # Reject anything that looks like a local path or scheme.
         if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:", text):
-            # e.g. "file://..." or "javascript:..." without an explicit http(s)
             raise InvalidURL(f"Only http/https URLs are supported: {text!r}")
         candidate = "https://" + text
     else:
@@ -49,31 +61,23 @@ def normalize_url(raw: str) -> str:
         raise InvalidURL(f"Only http/https URLs are supported: {text!r}")
     if not parsed.netloc:
         raise InvalidURL(f"Could not determine a host from URL: {text!r}")
-
-    # urlparse already lower-cases the scheme; candidate is valid as-is.
     return candidate
 
 
 def domain_slug(url: str) -> str:
-    """Return a filesystem-safe slug derived from the URL's host.
+    """Filesystem-safe slug from the URL's host.
 
     ``https://example.com/path`` -> ``example.com``
     ``https://Example.COM:8443`` -> ``example.com-8443``
-    ``https://www.example.co.uk`` -> ``www.example.co.uk``
-
-    Falls back to ``unknown`` if no host can be determined.
     """
     parsed = urlparse(url)
     host = (parsed.netloc or "").lower()
-    # Strip userinfo if present (user:pass@host).
     if "@" in host:
         host = host.rsplit("@", 1)[1]
-    # Split port from host. urlparse keeps the port in netloc.
     host_no_port = host.split(":", 1)[0]
-    port = parsed.port  # int or None
+    port = parsed.port
     if not host_no_port:
         return "unknown"
-    # Replace any character that is hostile to filesystems / shells.
     slug = re.sub(r"[^a-z0-9.\-]", "-", host_no_port)
     slug = re.sub(r"-+", "-", slug).strip("-.")
     if not slug:
@@ -83,49 +87,128 @@ def domain_slug(url: str) -> str:
     return slug
 
 
-def timestamp() -> str:
-    """Return a local-time timestamp suitable for filenames: ``YYYYMMDD_HHMMSS``."""
-    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+# --- naming --------------------------------------------------------------
+
+def timestamp(when: Optional[datetime.datetime] = None) -> str:
+    """``YYYYMMDD_HHMMSS`` in local time, suitable for directory names."""
+    return (when or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
 
 
-def build_filename(url: str, when: datetime.datetime | None = None) -> str:
-    """Return ``<domain>_<YYYYMMDD_HHMMSS>.html`` for the given URL."""
-    ts = (when or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
-    return f"{domain_slug(url)}_{ts}.html"
+def sanitize_custom_name(name: str) -> str:
+    """Sanitize a user-supplied name into a safe directory name.
 
-
-def resolve_unique_path(directory: Path, filename: str) -> Path:
-    """Return a non-colliding path inside ``directory``.
-
-    If ``directory/<filename>`` already exists, append ``_2``, ``_3``, ...
-    before the extension until a free name is found.
+    Keeps ``[A-Za-z0-9._-]``; collapses other characters to ``_``; trims
+    leading/trailing ``._-``; caps length at 80. Returns ``""`` if empty.
     """
-    directory.mkdir(parents=True, exist_ok=True)
-    stem = Path(filename).stem
-    suffix = Path(filename).suffix
-    candidate = directory / filename
+    if not name:
+        return ""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", name.strip())
+    cleaned = re.sub(r"[_]+", "_", cleaned).strip("._-")
+    return cleaned[:80]
+
+
+def run_directory_name(
+    url: str,
+    *,
+    custom_name: Optional[str] = None,
+    when: Optional[datetime.datetime] = None,
+) -> str:
+    """Return the directory name for a snapshot.
+
+    With ``custom_name``: the sanitized name. Otherwise ``<domain>_<timestamp>``.
+    """
+    custom = sanitize_custom_name(custom_name) if custom_name else ""
+    if custom:
+        return custom
+    return f"{domain_slug(url)}_{timestamp(when)}"
+
+
+def resolve_unique_run_dir(base_out: Path, name: str) -> Path:
+    """Return a non-colliding directory path inside ``base_out``.
+
+    If ``base_out/name`` already exists, append ``_2``, ``_3``, ...
+    """
+    base_out.mkdir(parents=True, exist_ok=True)
+    candidate = base_out / name
     counter = 2
     while candidate.exists():
-        candidate = directory / f"{stem}_{counter}{suffix}"
+        candidate = base_out / f"{name}_{counter}"
         counter += 1
+    candidate.mkdir(parents=True, exist_ok=False)
     return candidate
 
 
-def save_html(
-    html: str,
-    url: str,
-    out_dir: Path,
-    *,
-    when: datetime.datetime | None = None,
-) -> Path:
-    """Write ``html`` to ``out_dir/<domain>_<timestamp>.html`` and return the path.
+# --- metadata ------------------------------------------------------------
 
-    The output directory is created if it does not exist. Collisions on the
-    same second are de-duplicated via ``_2``, ``_3`` suffixes.
+def build_metadata(
+    *,
+    url: str,
+    title: Optional[str],
+    run_name: str,
+    when: Optional[datetime.datetime] = None,
+    has_screenshot: bool = False,
+    has_storage_state: bool = False,
+) -> dict[str, Any]:
+    """Build the ``metadata.json`` content for a snapshot."""
+    return {
+        "tool": TOOL,
+        "version": VERSION,
+        "url": url,
+        "title": title,
+        "saved_at": (when or datetime.datetime.now()).isoformat(timespec="seconds"),
+        "run_dir": run_name,
+        "html_file": "page.html",
+        "screenshot_file": "screenshot.png" if has_screenshot else None,
+        "storage_state_file": "storage_state.json" if has_storage_state else None,
+    }
+
+
+# --- snapshot writing ----------------------------------------------------
+
+def save_snapshot(
+    html: str,
+    *,
+    url: str,
+    title: Optional[str],
+    out_dir: Path,
+    screenshot_png: Optional[bytes] = None,
+    storage_state: Optional[dict[str, Any]] = None,
+    custom_name: Optional[str] = None,
+    when: Optional[datetime.datetime] = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Write a snapshot directory with page.html (+ optional artifacts).
+
+    Always writes ``page.html`` and ``metadata.json``. Writes
+    ``screenshot.png`` and ``storage_state.json`` only when the corresponding
+    argument is provided. Returns ``(run_dir_path, metadata_dict)``.
+
+    Collisions on the resolved directory name are de-duplicated via ``_2``,
+    ``_3`` suffixes.
     """
     if html is None:
-        raise ValueError("Cannot save empty HTML: page content was None.")
-    filename = build_filename(url, when=when)
-    path = resolve_unique_path(out_dir, filename)
-    path.write_text(html, encoding="utf-8")
-    return path
+        raise ValueError("Cannot save snapshot: page HTML was None.")
+
+    when = when or datetime.datetime.now()
+    name = run_directory_name(url, custom_name=custom_name, when=when)
+    run_dir = resolve_unique_run_dir(out_dir, name)
+
+    (run_dir / "page.html").write_text(html, encoding="utf-8")
+    if screenshot_png is not None:
+        (run_dir / "screenshot.png").write_bytes(screenshot_png)
+    if storage_state is not None:
+        (run_dir / "storage_state.json").write_text(
+            json.dumps(storage_state, indent=2, default=str), encoding="utf-8"
+        )
+
+    metadata = build_metadata(
+        url=url,
+        title=title,
+        run_name=run_dir.name,
+        when=when,
+        has_screenshot=screenshot_png is not None,
+        has_storage_state=storage_state is not None,
+    )
+    (run_dir / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, default=str), encoding="utf-8"
+    )
+    return run_dir, metadata

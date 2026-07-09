@@ -25,20 +25,9 @@
     color: var(--ink);
     line-height: 1.5;
   }
-  .wrap {
-    max-width: 760px;
-    margin: 0 auto;
-    padding: 32px 20px 64px;
-  }
-  header h1 {
-    font-size: 24px;
-    margin: 0 0 4px;
-  }
-  header p {
-    margin: 0 0 24px;
-    color: var(--muted);
-    font-size: 14px;
-  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 32px 20px 64px; }
+  header h1 { font-size: 24px; margin: 0 0 4px; }
+  header p { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
   .card {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -47,102 +36,84 @@
     margin-bottom: 16px;
   }
   label {
-    display: block;
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 6px;
-    color: var(--muted);
+    display: block; font-size: 13px; font-weight: 600;
+    margin-bottom: 6px; color: var(--muted);
   }
-  .row {
-    display: flex;
-    gap: 8px;
-    align-items: stretch;
+  .row { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+  input[type="text"], input[type="file"] {
+    flex: 1; padding: 10px 12px; font-size: 14px;
+    border: 1px solid var(--border); border-radius: 8px; outline: none;
+    font-family: inherit; background: #fff;
   }
-  input[type="text"] {
-    flex: 1;
-    padding: 10px 12px;
-    font-size: 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
-    font-family: inherit;
-  }
-  input[type="text"]:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
-  }
+  input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
+  input[type="file"] { padding: 8px 10px; font-size: 12px; color: var(--muted); }
   button {
-    padding: 10px 18px;
-    font-size: 14px;
-    font-weight: 600;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-family: inherit;
-    transition: background 0.15s, opacity 0.15s;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; border: none;
+    border-radius: 8px; cursor: pointer; font-family: inherit;
+    transition: background .15s, opacity .15s;
   }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
   .btn-save { background: var(--success); color: #fff; }
   .btn-save:hover:not(:disabled) { background: #15803d; }
-  .btn-ghost {
-    background: transparent;
-    color: var(--muted);
-    border: 1px solid var(--border);
-  }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
   .btn-ghost:hover:not(:disabled) { background: #f3f4f6; }
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    min-height: 20px;
-  }
-  .dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #d1d5db;
-    flex-shrink: 0;
-  }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 20px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; flex-shrink: 0; }
   .dot.open { background: var(--success); }
   .status-text { color: var(--muted); word-break: break-all; }
   .status-text strong { color: var(--ink); }
-  .error {
-    color: var(--danger);
-    font-size: 13px;
-    min-height: 18px;
-  }
-  .result {
-    font-size: 13px;
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    border-radius: 8px;
-    padding: 12px 14px;
-    word-break: break-all;
-  }
-  .result .path { color: var(--ink); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-  .result a { color: var(--accent); font-weight: 600; }
+  .error { color: var(--danger); font-size: 13px; min-height: 18px; }
+  .sub { font-size: 12px; color: var(--muted); }
   .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
   .hidden { display: none; }
+
+  /* snapshot result */
+  .result {
+    background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px;
+  }
+  .result .run { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--ink); word-break: break-all; }
+  .result .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .result img.thumb {
+    margin-top: 10px; max-width: 100%; max-height: 360px; border: 1px solid var(--border);
+    border-radius: 6px; display: block; background: #fff;
+  }
+  .result .dl { margin-top: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+  .result .dl a { color: var(--accent); font-weight: 600; }
+
+  /* snapshot list */
+  .snap-item {
+    padding: 10px 0; border-top: 1px solid var(--border); font-size: 13px;
+  }
+  .snap-item:first-child { border-top: none; }
+  .snap-item .name { font-family: ui-monospace, Consolas, monospace; color: var(--ink); word-break: break-all; }
+  .snap-item .info { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .snap-item a { color: var(--accent); }
+  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>DOMVault</h1>
-    <p>Open a URL with Playwright, interact with the page, then capture the current rendered HTML.</p>
+    <p>Open a URL with Playwright, interact with the page, then capture a snapshot of the current rendered state.</p>
   </header>
 
+  <!-- OPEN -->
   <section class="card">
     <label for="url">URL</label>
     <div class="row">
       <input id="url" type="text" placeholder="example.com" autocomplete="off" />
       <button id="openBtn" class="btn-primary" type="button">Open</button>
     </div>
-    <p class="hint">No scheme is needed — <code>https://</code> is added automatically.</p>
+
+    <label for="stateFile" style="margin-top:14px">Restore login state (optional)</label>
+    <div class="row">
+      <input id="stateFile" type="file" accept=".json,application/json" />
+      <span class="sub" style="align-self:center">load a previous <code>storage_state.json</code></span>
+    </div>
+
     <div class="status" style="margin-top:14px">
       <span id="dot" class="dot"></span>
       <span id="statusText" class="status-text">No browser session.</span>
@@ -150,13 +121,22 @@
     <div id="error" class="error" style="margin-top:8px"></div>
   </section>
 
+  <!-- SAVE -->
   <section class="card">
-    <label>Capture</label>
+    <label>Capture snapshot</label>
     <div class="row">
-      <button id="saveBtn" class="btn-save" type="button" disabled>Save current HTML</button>
+      <input id="filename" type="text" placeholder="snapshot name (optional)" autocomplete="off" style="max-width:300px" />
+      <button id="saveBtn" class="btn-save" type="button" disabled>Save snapshot</button>
       <button id="closeBtn" class="btn-ghost" type="button" disabled>Close browser</button>
     </div>
+    <p class="hint">Saves the current rendered HTML, a full-page screenshot, the storage state (cookies + localStorage), and <code>metadata.json</code> into its own directory.</p>
     <div id="result" class="result hidden" style="margin-top:14px"></div>
+  </section>
+
+  <!-- RECENT -->
+  <section class="card">
+    <label>Recent snapshots</label>
+    <div id="snapList"><span class="sub">No snapshots yet.</span></div>
   </section>
 </div>
 
@@ -164,38 +144,28 @@
 (function () {
   "use strict";
 
-  const urlEl = document.getElementById("url");
-  const openBtn = document.getElementById("openBtn");
-  const saveBtn = document.getElementById("saveBtn");
-  const closeBtn = document.getElementById("closeBtn");
-  const dotEl = document.getElementById("dot");
-  const statusTextEl = document.getElementById("statusText");
-  const errorEl = document.getElementById("error");
-  const resultEl = document.getElementById("result");
+  const $ = (id) => document.getElementById(id);
+  const urlEl = $("url"), stateFileEl = $("stateFile"), filenameEl = $("filename");
+  const openBtn = $("openBtn"), saveBtn = $("saveBtn"), closeBtn = $("closeBtn");
+  const dotEl = $("dot"), statusTextEl = $("statusText"), errorEl = $("error");
+  const resultEl = $("result"), snapListEl = $("snapList");
 
-  function setError(msg) {
-    errorEl.textContent = msg || "";
-  }
-  function clearResult() {
-    resultEl.classList.add("hidden");
-    resultEl.innerHTML = "";
-  }
-  function showResult(payload) {
-    resultEl.classList.remove("hidden");
-    resultEl.innerHTML =
-      '<div>Saved <strong>' + escapeHtml(payload.filename) + '</strong></div>' +
-      '<div class="path">' + escapeHtml(payload.path) + '</div>' +
-      '<div style="margin-top:6px"><a href="' + escapeHtml(payload.download_url) + '" target="_blank">Download / open file</a></div>';
-  }
+  function setError(msg) { errorEl.textContent = msg || ""; }
+  function clearResult() { resultEl.classList.add("hidden"); resultEl.innerHTML = ""; }
   function escapeHtml(s) {
     return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;").replace(/'/g,"#39;");
   }
+  function isoShort(iso) {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  }
+
   function renderStatus(s) {
     if (s.open) {
       dotEl.classList.add("open");
-      statusTextEl.innerHTML = "Open: <strong>" + escapeHtml(s.title || "(no title)") + "</strong> — " + escapeHtml(s.url || "");
+      statusTextEl.innerHTML = "Open: <strong>" + escapeHtml(s.title || "(no title)") + "</strong> &mdash; " + escapeHtml(s.url || "");
       saveBtn.disabled = false;
       closeBtn.disabled = false;
     } else {
@@ -220,15 +190,32 @@
     return data;
   }
 
+  function readStateFile() {
+    return new Promise((resolve, reject) => {
+      const file = stateFileEl.files && stateFileEl.files[0];
+      if (!file) { resolve(null); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try { resolve(JSON.parse(reader.result)); }
+        catch (e) { reject(new Error("storage_state file is not valid JSON.")); }
+      };
+      reader.onerror = () => reject(new Error("Could not read storage_state file."));
+      reader.readAsText(file);
+    });
+  }
+
   async function doOpen() {
-    setError("");
-    clearResult();
+    setError(""); clearResult();
     const url = urlEl.value.trim();
     if (!url) { setError("Please enter a URL."); return; }
+    let storageState = null;
+    try { storageState = await readStateFile(); }
+    catch (e) { setError(e.message); return; }
     openBtn.disabled = true;
     try {
-      const s = await postJSON("/api/open", { url: url });
+      const s = await postJSON("/api/open", { url: url, storage_state: storageState });
       renderStatus(s);
+      if (storageState) setError("");  // state loaded fine
     } catch (e) {
       setError(e.message);
       await refreshStatus();
@@ -237,12 +224,35 @@
     }
   }
 
+  function renderResult(payload) {
+    const files = payload.files || {};
+    const dl = payload.downloads || {};
+    const meta = payload.metadata || {};
+    const links = [];
+    if (dl.html) links.push('<a href="' + dl.html + '" target="_blank">page.html</a>');
+    if (dl.screenshot) links.push('<a href="' + dl.screenshot + '" target="_blank">screenshot.png</a>');
+    if (dl.storage_state) links.push('<a href="' + dl.storage_state + '" target="_blank">storage_state.json</a>');
+    if (dl.metadata) links.push('<a href="' + dl.metadata + '" target="_blank">metadata.json</a>');
+
+    let html =
+      '<div class="run">' + escapeHtml(payload.run_dir) + '</div>' +
+      '<div class="meta">Saved <strong>' + escapeHtml(payload.title || "(no title)") + '</strong> &mdash; ' + escapeHtml(payload.url) +
+      (meta.saved_at ? ' &middot; ' + escapeHtml(isoShort(meta.saved_at)) : '') + '</div>';
+    if (dl.screenshot) {
+      html += '<img class="thumb" src="' + dl.screenshot + '" alt="screenshot" />';
+    }
+    html += '<div class="dl">' + links.join("") + '</div>';
+    resultEl.innerHTML = html;
+    resultEl.classList.remove("hidden");
+  }
+
   async function doSave() {
     setError("");
     saveBtn.disabled = true;
     try {
-      const payload = await postJSON("/api/save", {});
-      showResult(payload);
+      const payload = await postJSON("/api/save", { filename: filenameEl.value.trim() || null });
+      renderResult(payload);
+      await refreshSnapshots();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -251,8 +261,7 @@
   }
 
   async function doClose() {
-    setError("");
-    clearResult();
+    setError(""); clearResult();
     closeBtn.disabled = true;
     try {
       await postJSON("/api/close", {});
@@ -265,25 +274,38 @@
   }
 
   async function refreshStatus() {
+    try { renderStatus(await (await fetch("/api/status")).json()); }
+    catch { /* server unreachable */ }
+  }
+
+  async function refreshSnapshots() {
     try {
-      const resp = await fetch("/api/status");
-      const s = await resp.json();
-      renderStatus(s);
-    } catch {
-      // server unreachable; leave UI as-is
-    }
+      const data = await (await fetch("/api/snapshots")).json();
+      const snaps = data.snapshots || [];
+      if (!snaps.length) { snapListEl.innerHTML = '<span class="sub">No snapshots yet.</span>'; return; }
+      snapListEl.innerHTML = snaps.slice(0, 20).map((s) => {
+        const m = s.metadata || {};
+        const name = escapeHtml(s.name);
+        const title = m.title ? escapeHtml(m.title) : "";
+        const url = m.url ? '<span class="info">' + escapeHtml(m.url) + (title ? ' &mdash; ' + title : '') + '</span>' : '';
+        const links = [];
+        links.push('<a href="/api/download/' + encodeURIComponent(s.name) + '/page.html" target="_blank">html</a>');
+        if (m.screenshot_file) links.push('<a href="/api/download/' + encodeURIComponent(s.name) + '/screenshot.png" target="_blank">screenshot</a>');
+        if (m.storage_state_file) links.push('<a href="/api/download/' + encodeURIComponent(s.name) + '/storage_state.json" target="_blank">state</a>');
+        return '<div class="snap-item"><div class="name">' + name + '</div>' + url +
+               '<div class="info">' + links.join(" · ") + '</div></div>';
+      }).join("");
+    } catch { /* ignore */ }
   }
 
   openBtn.addEventListener("click", doOpen);
   saveBtn.addEventListener("click", doSave);
   closeBtn.addEventListener("click", doClose);
-  urlEl.addEventListener("keydown", function (e) {
-    if (e.key === "Enter") { e.preventDefault(); doOpen(); }
-  });
+  urlEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doOpen(); } });
 
-  // Poll status every 2s so the panel reflects manual navigation / window close.
   setInterval(refreshStatus, 2000);
   refreshStatus();
+  refreshSnapshots();
 })();
 </script>
 </body>

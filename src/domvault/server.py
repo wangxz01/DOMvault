@@ -1,39 +1,39 @@
 """FastAPI control panel for DOMVault.
 
-Endpoints (MVP):
-    GET  /                       control panel HTML
-    POST /api/open               {"url": "..."} -> open/navigate the browser
-    POST /api/save               save current page HTML to saved_html/
-    GET  /api/status             current session state
-    GET  /api/download/<name>    download a saved HTML file
-    POST /api/close              close the browser (server keeps running)
+Endpoints (V0.2):
+    GET  /                            control panel HTML
+    POST /api/open                    {"url": "...", "storage_state"?: {...}}
+    POST /api/save                    save current page as a snapshot directory
+    GET  /api/status                  current session state
+    GET  /api/download/{run}/{file}   download a file from a snapshot directory
+    GET  /api/snapshots               list saved snapshot directories
+    POST /api/close                   close the browser (server keeps running)
 
-The saved HTML directory defaults to ``./saved_html`` relative to the current
-working directory when the server started; it is configurable via
+The output directory defaults to ``./saved_html`` and is configurable via
 ``set_output_dir``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import browser
-from .saver import InvalidURL, normalize_url, save_html
+from .saver import InvalidURL, normalize_url, save_snapshot
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _INDEX_HTML = _STATIC_DIR / "index.html"
 
-# Output directory for saved HTML. Defaults to ./saved_html under CWD.
+# Output directory for snapshots. Defaults to ./saved_html under CWD.
 _output_dir: Path = Path("saved_html")
 
 
 def set_output_dir(path: Path) -> None:
-    """Override the directory where saved HTML files are written."""
+    """Override the directory where snapshots are written."""
     global _output_dir
     _output_dir = Path(path)
 
@@ -42,7 +42,7 @@ def get_output_dir() -> Path:
     return _output_dir
 
 
-app = FastAPI(title="DOMVault", version="0.1.0")
+app = FastAPI(title="DOMVault", version="0.2.0")
 
 
 # --- request/response models ---------------------------------------------
@@ -50,11 +50,25 @@ app = FastAPI(title="DOMVault", version="0.1.0")
 class OpenRequest(BaseModel):
     url: str
     browser: Optional[str] = "chromium"
+    # Optional Playwright storage state (as produced by context.storage_state())
+    # to restore cookies/localStorage into the new context.
+    storage_state: Optional[Any] = Field(default=None)
 
 
 class SaveRequest(BaseModel):
-    # Reserved for V0.2 (custom filename). Ignored in MVP.
+    # Optional custom directory name for the snapshot.
     filename: Optional[str] = None
+
+
+# --- helpers -------------------------------------------------------------
+
+def _bad_segment(seg: str) -> bool:
+    """True if a path segment is unsafe (traversal / empty / absolute)."""
+    if not seg or seg in (".", ".."):
+        return True
+    if "/" in seg or "\\" in seg:
+        return True
+    return False
 
 
 # --- routes --------------------------------------------------------------
@@ -62,8 +76,7 @@ class SaveRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """Serve the control panel."""
-    html = _INDEX_HTML.read_text(encoding="utf-8")
-    return HTMLResponse(html)
+    return HTMLResponse(_INDEX_HTML.read_text(encoding="utf-8"))
 
 
 @app.post("/api/open")
@@ -75,8 +88,14 @@ async def api_open(payload: OpenRequest) -> JSONResponse:
     kind = (payload.browser or "chromium").lower()
     if kind not in ("chromium", "firefox", "webkit"):
         raise HTTPException(status_code=400, detail=f"Unsupported browser: {payload.browser}")
+    storage_state = payload.storage_state
+    if storage_state is not None and not isinstance(storage_state, (dict, list)):
+        raise HTTPException(
+            status_code=400,
+            detail="storage_state must be an object (from a storage_state.json).",
+        )
     try:
-        result = await browser.open_url(url, kind=kind)  # type: ignore[arg-type]
+        result = await browser.open_url(url, kind=kind, storage_state=storage_state)  # type: ignore[arg-type]
     except browser.BrowserError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return JSONResponse(result)
@@ -84,22 +103,64 @@ async def api_open(payload: OpenRequest) -> JSONResponse:
 
 @app.post("/api/save")
 async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
+    payload = payload or SaveRequest()
+    # HTML + URL + title are required.
     try:
         html = await browser.current_html()
         url = await browser.current_url()
+        title = await browser.current_title()
     except browser.BrowserError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    # Screenshot and storage state are best-effort: if they fail we still save
+    # the HTML, recording null in metadata.
+    screenshot_png: Optional[bytes] = None
     try:
-        path = save_html(html, url, get_output_dir())
+        screenshot_png = await browser.current_screenshot()
+    except browser.BrowserError:
+        screenshot_png = None
+    storage_state: Optional[dict] = None
+    try:
+        storage_state = await browser.current_storage_state()
+    except browser.BrowserError:
+        storage_state = None
+
+    try:
+        run_dir, metadata = save_snapshot(
+            html,
+            url=url,
+            title=title,
+            out_dir=get_output_dir(),
+            screenshot_png=screenshot_png,
+            storage_state=storage_state,
+            custom_name=payload.filename,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    filename = path.name
+
+    run_name = run_dir.name
+    downloads = {
+        "html": f"/api/download/{run_name}/page.html",
+        "metadata": f"/api/download/{run_name}/metadata.json",
+    }
+    if screenshot_png is not None:
+        downloads["screenshot"] = f"/api/download/{run_name}/screenshot.png"
+    if storage_state is not None:
+        downloads["storage_state"] = f"/api/download/{run_name}/storage_state.json"
+
     return JSONResponse({
         "ok": True,
-        "path": str(path.resolve()),
-        "filename": filename,
+        "run_dir": run_name,
+        "path": str(run_dir.resolve()),
         "url": url,
-        "download_url": f"/api/download/{filename}",
+        "title": title,
+        "files": {
+            "html": "page.html",
+            "screenshot": "screenshot.png" if screenshot_png is not None else None,
+            "storage_state": "storage_state.json" if storage_state is not None else None,
+        },
+        "downloads": downloads,
+        "metadata": metadata,
     })
 
 
@@ -108,20 +169,55 @@ async def api_status() -> JSONResponse:
     return JSONResponse(await browser.status())
 
 
-@app.get("/api/download/{filename}")
-async def api_download(filename: str) -> FileResponse:
-    # Prevent path traversal: only allow bare filenames inside the output dir.
-    if "/" in filename or "\\" in filename or filename in ("", ".", ".."):
-        raise HTTPException(status_code=400, detail="Invalid filename.")
-    target = (get_output_dir() / filename).resolve()
+@app.get("/api/snapshots")
+async def api_snapshots() -> JSONResponse:
+    """List snapshot directories in the output folder, newest first."""
+    base = get_output_dir()
+    if not base.is_dir():
+        return JSONResponse({"snapshots": []})
+    entries = []
+    for child in base.iterdir():
+        if not child.is_dir():
+            continue
+        meta_path = child / "metadata.json"
+        meta = None
+        if meta_path.is_file():
+            try:
+                import json
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                meta = None
+        entries.append({
+            "name": child.name,
+            "mtime": int(child.stat().st_mtime),
+            "metadata": meta,
+        })
+    entries.sort(key=lambda e: e["mtime"], reverse=True)
+    return JSONResponse({"snapshots": entries})
+
+
+@app.get("/api/download/{run_name}/{filename}")
+async def api_download(run_name: str, filename: str) -> FileResponse:
+    """Download a single file from a snapshot directory.
+
+    Strict segment validation + resolve-within-base guards against traversal.
+    """
+    if _bad_segment(run_name) or _bad_segment(filename):
+        raise HTTPException(status_code=400, detail="Invalid path.")
     base = get_output_dir().resolve()
+    target = (base / run_name / filename).resolve()
     try:
         target.relative_to(base)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid filename.")
+        raise HTTPException(status_code=400, detail="Invalid path.")
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found.")
-    return FileResponse(str(target), media_type="text/html", filename=filename)
+    media = {
+        ".html": "text/html",
+        ".png": "image/png",
+        ".json": "application/json",
+    }.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(target), media_type=media, filename=filename)
 
 
 @app.post("/api/close")

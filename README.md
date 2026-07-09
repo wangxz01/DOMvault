@@ -74,18 +74,30 @@ domvault --help
 2. Visit <http://127.0.0.1:8000>
 3. Type a URL and click **Open** — a headed Chromium window opens to that page.
 4. Do whatever you need in that browser: log in, search, filter, paginate.
-5. Click **Save current HTML**. The current rendered DOM is written to
-   `saved_html/<domain>_<YYYYMMDD_HHMMSS>.html`, and the control panel shows
-   the file path plus a download link.
+5. Click **Save snapshot**. The current rendered HTML, a full-page screenshot,
+   the storage state (cookies + localStorage), and `metadata.json` are written
+   into their own directory `saved_html/<name>/`. The control panel shows a
+   screenshot preview plus a download link for each artifact.
 6. Navigate somewhere else and click **Save** again — each save gets its own
-   timestamped file, never overwriting a previous one.
+   timestamped directory, never overwriting a previous one.
+
+To resume a logged-in session: pick a previous `storage_state.json` in the
+**Restore login state** field before clicking **Open** — the browser starts
+with those cookies/localStorage already set.
 
 ### Output
 
 ```
 saved_html/
-└── example.com_20260709_213000.html
+└── example.com_20260709_213000/
+    ├── page.html              # rendered DOM
+    ├── screenshot.png         # full-page screenshot
+    ├── storage_state.json     # cookies + localStorage (reloadable)
+    └── metadata.json          # url, title, saved_at, file list
 ```
+
+You can pass an optional snapshot name; otherwise the directory is named
+`<domain>_<YYYYMMDD_HHMMSS>`.
 
 ---
 
@@ -102,7 +114,7 @@ saved_html/
 │  Playwright (async) ──▶ headed Chromium      │
 │      │                                       │
 │      ▼                                       │
-│  page.content() ──▶ saved_html/*.html        │
+│  page.content() / screenshot / state ──▶ saved_html/<snapshot>/        │
 └─────────────────────────────────────────────┘
 ```
 

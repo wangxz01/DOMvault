@@ -48,53 +48,71 @@ class BrowserError(RuntimeError):
     """User-facing browser error (bad URL, navigation failure, closed browser)."""
 
 
-async def _ensure_started(kind: BrowserKind) -> None:
-    """Start playwright + a browser + context + page if not already running.
+async def _ensure_started(
+    kind: BrowserKind,
+    storage_state: dict | list | str | None = None,
+) -> None:
+    """Ensure browser/context/page are running, applying ``storage_state`` if given.
 
     Reuses an already-alive browser/context when possible (e.g. after the user
-    closed only the page/window), and only does a full restart when the browser
-    process itself is gone. This avoids leaking Playwright instances.
+    closed only the page/window). Only does a full restart when the browser
+    process itself is gone. When ``storage_state`` is provided, a fresh context
+    carrying that state is created so login cookies/localStorage are restored.
     """
-    if _session.page is not None and not _session.page.is_closed():
-        return  # fast path: session already healthy
-
-    # Browser still connected but page was closed -> reuse context, new page.
+    # Fast path: session healthy and no storage_state requested.
     if (
-        _session.browser is not None
-        and _session.browser.is_connected()
-        and _session.context is not None
+        storage_state is None
+        and _session.page is not None
+        and not _session.page.is_closed()
     ):
-        try:
-            _session.page = await _session.context.new_page()
-            _session.page.on("close", _on_page_closed)
-            return
-        except PlaywrightError:
-            # Context went away; fall through to a full restart.
-            await _hard_stop()
+        return
 
-    # Full (re)start. Tear down any stale state first to avoid leaks.
-    await _hard_stop()
-    try:
-        pw = await async_playwright().start()
-    except PlaywrightError as exc:  # pragma: no cover - environment error
-        raise BrowserError(f"Could not start Playwright: {exc}") from exc
-    _session.pw = pw
-    _session.kind = kind
-    try:
-        launcher = getattr(pw, kind)
-        _session.browser = await launcher.launch(headless=False)
-    except PlaywrightError as exc:
-        # Common: browser binary not installed. Surface a clear message.
+    # Full start if the browser process is gone (or first run).
+    browser_alive = (
+        _session.pw is not None
+        and _session.browser is not None
+        and _session.browser.is_connected()
+    )
+    if not browser_alive:
         await _hard_stop()
-        if "executable doesn't exist" in str(exc) or "playwright install" in str(exc).lower():
-            raise BrowserError(
-                "Playwright browser binary not found. Run `playwright install chromium` once."
-            ) from exc
-        raise BrowserError(f"Could not launch {kind}: {exc}") from exc
-    _session.context = await _session.browser.new_context()
-    # Surface unexpected page-close events via status rather than crashes.
-    _session.page = await _session.context.new_page()
-    _session.page.on("close", _on_page_closed)
+        try:
+            pw = await async_playwright().start()
+        except PlaywrightError as exc:  # pragma: no cover - environment error
+            raise BrowserError(f"Could not start Playwright: {exc}") from exc
+        _session.pw = pw
+        _session.kind = kind
+        try:
+            _session.browser = await getattr(pw, kind).launch(headless=False)
+        except PlaywrightError as exc:
+            await _hard_stop()
+            if "executable doesn't exist" in str(exc) or "playwright install" in str(exc).lower():
+                raise BrowserError(
+                    "Playwright browser binary not found. Run `playwright install chromium` once."
+                ) from exc
+            raise BrowserError(f"Could not launch {kind}: {exc}") from exc
+
+    # storage_state can only be applied when creating a context. If a context
+    # already exists (and state was requested), close it so a fresh one is made.
+    if storage_state is not None and _session.context is not None:
+        try:
+            await _session.context.close()
+        except PlaywrightError:
+            pass
+        _session.context = None
+        _session.page = None
+
+    # Create context if missing, optionally seeded with storage_state.
+    if _session.context is None:
+        ctx_kwargs = {"storage_state": storage_state} if storage_state is not None else {}
+        try:
+            _session.context = await _session.browser.new_context(**ctx_kwargs)
+        except PlaywrightError as exc:
+            raise BrowserError(f"Could not create browser context: {exc}") from exc
+
+    # Create page if missing (or closed by the user).
+    if _session.page is None or _session.page.is_closed():
+        _session.page = await _session.context.new_page()
+        _session.page.on("close", _on_page_closed)
 
 
 def _on_page_closed() -> None:
@@ -122,13 +140,19 @@ async def _hard_stop() -> None:
     _session.pw = None
 
 
-async def open_url(url: str, kind: BrowserKind = "chromium") -> dict:
+async def open_url(
+    url: str,
+    kind: BrowserKind = "chromium",
+    storage_state: dict | list | str | None = None,
+) -> dict:
     """Open (or navigate) the browser to ``url``.
 
-    If no browser is running, one is started headed. Returns a status dict.
+    If no browser is running, one is started headed. When ``storage_state`` is
+    given (a dict from ``context.storage_state()``), the context is created with
+    that state so cookies/localStorage are restored. Returns a status dict.
     Raises :class:`BrowserError` on navigation failure or missing binary.
     """
-    await _ensure_started(kind)
+    await _ensure_started(kind, storage_state=storage_state)
     page = _session.page
     assert page is not None  # _ensure_started guarantees this
     try:
@@ -172,6 +196,36 @@ async def current_url() -> str:
     if not _session.open or _session.page is None:
         raise BrowserError("No browser session is open. Open a URL first.")
     return _session.page.url
+
+
+async def current_title() -> str:
+    """Return the page's current title."""
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    try:
+        return await _session.page.title()
+    except PlaywrightError as exc:
+        raise BrowserError(f"Could not read page title: {exc}") from exc
+
+
+async def current_screenshot() -> bytes:
+    """Return a full-page PNG screenshot of the current page."""
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    try:
+        return await _session.page.screenshot(full_page=True)
+    except PlaywrightError as exc:
+        raise BrowserError(f"Could not capture screenshot: {exc}") from exc
+
+
+async def current_storage_state() -> dict:
+    """Return the context storage state (cookies + localStorage/sessionStorage)."""
+    if _session.context is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    try:
+        return await _session.context.storage_state()
+    except PlaywrightError as exc:
+        raise BrowserError(f"Could not read storage state: {exc}") from exc
 
 
 async def close() -> None:

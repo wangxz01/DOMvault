@@ -5,4 +5,4 @@ user manually interact with a page, and saves the current rendered HTML on deman
 For scraping learning, selector debugging, and WebRPA flow analysis.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

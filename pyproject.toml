@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "domvault"
-version = "0.1.0"
+version = "0.2.0"
 description = "A lightweight local Playwright-based tool for capturing the current rendered HTML of a web page after manual interaction, for scraping learning and WebRPA debugging."
 readme = "README.md"
 license = { text = "MIT" }

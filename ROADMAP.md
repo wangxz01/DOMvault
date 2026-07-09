@@ -63,11 +63,11 @@ DOMVault 在 MVP 阶段主要保存当前渲染后的 DOM HTML，不追求完整
 
 ## V0.2 — useful for scraping learners
 
-- [ ] Save page screenshots
-- [ ] Save page metadata (URL, title, timestamp)
-- [ ] Save each snapshot into an independent directory
-- [ ] Save and load Playwright `storage_state.json`
-- [ ] Support custom filenames
+- [x] Save page screenshots
+- [x] Save page metadata (URL, title, timestamp)
+- [x] Save each snapshot into an independent directory
+- [x] Save and load Playwright `storage_state.json`
+- [x] Support custom filenames
 
 Planned snapshot structure:
 
