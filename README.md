@@ -62,9 +62,26 @@ interact with the Playwright browser that pops up, then click
 Options:
 
 ```bash
-domvault --host 127.0.0.1 --port 8000
+domvault                              # start the web panel (default command)
+domvault serve --host 127.0.0.1 --port 8000
+domvault --version
 domvault --help
 ```
+
+### One-shot capture (no UI)
+
+For scripting, capture a snapshot headless and print its path:
+
+```bash
+domvault capture example.com --name home
+# -> writes saved_html/home/... and prints the directory path to stdout
+```
+
+Useful flags: `--out/-o`, `--name`, `--browser/-b`, `--wait load|domcontentloaded|networkidle`,
+`--timeout`, `--storage-state FILE`, `--no-screenshot`, `--no-frames`.
+
+See the [examples/](./examples) folder for end-to-end walkthroughs (basic
+capture, resuming a logged-in session, finding where data comes from).
 
 ---
 
@@ -146,6 +163,10 @@ browser it controls is a separate headed Chromium window.
 
 See [ROADMAP.md](./ROADMAP.md) for the full milestone plan
 (MVP → V0.2 → V0.3 → V1.0).
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
 
 ## Development
 

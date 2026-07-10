@@ -96,10 +96,10 @@ saved_html/
 
 ## V1.0 — releasable tool
 
-- [ ] Provide a stable local workflow for web scraping learners and WebRPA debugging
-- [ ] Support rendered DOM capture, screenshots, metadata, and storage state
-- [ ] Include clear documentation and examples
-- [ ] Package the tool for convenient local installation
+- [x] Provide a stable local workflow for web scraping learners and WebRPA debugging
+- [x] Support rendered DOM capture, screenshots, metadata, and storage state
+- [x] Include clear documentation and examples
+- [x] Package the tool for convenient local installation
 
 ## Explicitly out of scope
 

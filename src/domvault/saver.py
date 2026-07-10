@@ -24,7 +24,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 TOOL = "DOMVault"
-VERSION = "0.3.0"
+VERSION = "1.0.0"
 
 
 class InvalidURL(ValueError):

@@ -63,15 +63,18 @@ async def _ensure_started(
     kind: BrowserKind,
     storage_state: dict | list | str | None = None,
     record_har: bool = False,
+    headless: bool = False,
 ) -> None:
     """Ensure browser/context/page are running, applying ``storage_state`` if given.
 
     Reuses an already-alive browser/context when possible (e.g. after the user
     closed only the page/window). Only does a full restart when the browser
-    process itself is gone. When ``storage_state`` is provided, a fresh context
-    carrying that state is created so login cookies/localStorage are restored.
-    When ``record_har`` is True (and a new context is being created), all
-    network traffic for the session is recorded to a temp HAR file.
+    process itself is gone. ``headless`` only takes effect when a new browser
+    is launched (the web UI passes False, the CLI capture command passes True).
+    When ``storage_state`` is provided, a fresh context carrying that state is
+    created so login cookies/localStorage are restored. When ``record_har`` is
+    True (and a new context is being created), all network traffic for the
+    session is recorded to a temp HAR file.
     """
     # Fast path: session healthy and no storage_state requested.
     if (
@@ -96,7 +99,7 @@ async def _ensure_started(
         _session.pw = pw
         _session.kind = kind
         try:
-            _session.browser = await getattr(pw, kind).launch(headless=False)
+            _session.browser = await getattr(pw, kind).launch(headless=headless)
         except PlaywrightError as exc:
             await _hard_stop()
             if "executable doesn't exist" in str(exc) or "playwright install" in str(exc).lower():
@@ -187,20 +190,27 @@ async def open_url(
     kind: BrowserKind = "chromium",
     storage_state: dict | list | str | None = None,
     record_har: bool = False,
+    headless: bool = False,
+    wait_until: str = "domcontentloaded",
+    timeout: float = 30000,
 ) -> dict:
     """Open (or navigate) the browser to ``url``.
 
-    If no browser is running, one is started headed. When ``storage_state`` is
-    given (a dict from ``context.storage_state()``), the context is created with
-    that state so cookies/localStorage are restored. When ``record_har`` is True
-    and a new context is created, the session's network is recorded to a temp
-    HAR file (finalized on :func:`close`). Returns a status dict.
+    If no browser is running, one is started (headed unless ``headless``).
+    When ``storage_state`` is given (a dict from ``context.storage_state()``),
+    the context is created with that state so cookies/localStorage are
+    restored. When ``record_har`` is True and a new context is created, the
+    session's network is recorded to a temp HAR file (finalized on
+    :func:`close`). ``wait_until`` and ``timeout`` (milliseconds) are passed to
+    ``page.goto``. Returns a status dict.
     """
-    await _ensure_started(kind, storage_state=storage_state, record_har=record_har)
+    await _ensure_started(
+        kind, storage_state=storage_state, record_har=record_har, headless=headless
+    )
     page = _session.page
     assert page is not None  # _ensure_started guarantees this
     try:
-        await page.goto(url, wait_until="domcontentloaded")
+        await page.goto(url, wait_until=wait_until, timeout=timeout)
     except PlaywrightError as exc:
         raise BrowserError(f"Could not open {url}: {exc}") from exc
     return await status()

@@ -1,0 +1,10 @@
+# Normalize text file line endings to LF across platforms; silences the
+# Windows CRLF autocrlf warnings on commit.
+* text=auto eol=lf
+
+# Binary assets — never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.har binary

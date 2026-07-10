@@ -25,7 +25,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from . import browser
-from .saver import InvalidURL, normalize_url, save_snapshot
+from .capture import capture_snapshot
+from .saver import InvalidURL, normalize_url
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _INDEX_HTML = _STATIC_DIR / "index.html"
@@ -44,7 +45,7 @@ def get_output_dir() -> Path:
     return _output_dir
 
 
-app = FastAPI(title="DOMVault", version="0.3.0")
+app = FastAPI(title="DOMVault", version="1.0.0")
 
 
 # --- request/response models ---------------------------------------------
@@ -122,92 +123,29 @@ async def api_open(payload: OpenRequest) -> JSONResponse:
 @app.post("/api/save")
 async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
     payload = payload or SaveRequest()
-    # HTML + URL + title are required.
     try:
-        html = await browser.current_html()
-        url = await browser.current_url()
-        title = await browser.current_title()
+        result = await capture_snapshot(get_output_dir(), custom_name=payload.filename)
     except browser.BrowserError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-
-    # Screenshot and storage state are best-effort: if they fail we still save
-    # the HTML, recording null in metadata.
-    screenshot_png: Optional[bytes] = None
-    try:
-        screenshot_png = await browser.current_screenshot()
-    except browser.BrowserError:
-        screenshot_png = None
-    storage_state: Optional[dict] = None
-    try:
-        storage_state = await browser.current_storage_state()
-    except browser.BrowserError:
-        storage_state = None
-    # Frames (main + iframes) for separate iframe HTML capture.
-    frames: Optional[list] = None
-    try:
-        frames = await browser.frame_contents()
-    except browser.BrowserError:
-        frames = None
-    # Point-in-time snapshot of network + console events for the run so far.
-    collector = browser.get_collector()
-    network_events = list(collector.network)
-    console_events = list(collector.console)
-
-    try:
-        run_dir, metadata = save_snapshot(
-            html,
-            url=url,
-            title=title,
-            out_dir=get_output_dir(),
-            screenshot_png=screenshot_png,
-            storage_state=storage_state,
-            frames=frames,
-            network_events=network_events,
-            console_events=console_events,
-            custom_name=payload.filename,
-        )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    run_name = run_dir.name
+    run_name = result["run_dir"]
+    files = result["files"]
     downloads = {
         "html": f"/api/download/{run_name}/page.html",
         "metadata": f"/api/download/{run_name}/metadata.json",
     }
-    if screenshot_png is not None:
+    if files["screenshot"]:
         downloads["screenshot"] = f"/api/download/{run_name}/screenshot.png"
-    if storage_state is not None:
+    if files["storage_state"]:
         downloads["storage_state"] = f"/api/download/{run_name}/storage_state.json"
-    if metadata.get("frames_file"):
-        downloads["frames"] = f"/api/download/{run_name}/{metadata['frames_file']}"
-    if metadata.get("network_file"):
-        downloads["network"] = f"/api/download/{run_name}/{metadata['network_file']}"
-    if metadata.get("console_file"):
-        downloads["console"] = f"/api/download/{run_name}/{metadata['console_file']}"
-
-    return JSONResponse({
-        "ok": True,
-        "run_dir": run_name,
-        "path": str(run_dir.resolve()),
-        "url": url,
-        "title": title,
-        "files": {
-            "html": "page.html",
-            "screenshot": "screenshot.png" if screenshot_png is not None else None,
-            "storage_state": "storage_state.json" if storage_state is not None else None,
-            "frames": metadata.get("frames_file"),
-            "network": metadata.get("network_file"),
-            "console": metadata.get("console_file"),
-        },
-        "counts": {
-            "frames": metadata.get("frame_count", 0),
-            "network": metadata.get("network_event_count", 0),
-            "console": metadata.get("console_event_count", 0),
-        },
-        "frames": metadata.get("frames", []),
-        "downloads": downloads,
-        "metadata": metadata,
-    })
+    for key in ("frames", "network", "console"):
+        if files[key]:
+            downloads[key] = f"/api/download/{run_name}/{files[key]}"
+    result["downloads"] = downloads
+    result["ok"] = True
+    return JSONResponse(result)
 
 
 @app.get("/api/status")
