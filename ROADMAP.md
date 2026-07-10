@@ -82,14 +82,14 @@ saved_html/
 
 ## V0.3 — WebRPA debugging
 
-- [ ] List all frames in the current page
-- [ ] Save iframe HTML separately
-- [ ] Record HAR files for network analysis
-- [ ] Provide basic CSS selector testing
-- [ ] Provide basic XPath testing
-- [ ] Highlight matched elements in the browser
-- [ ] Save console logs
-- [ ] Save request/response summaries
+- [x] List all frames in the current page
+- [x] Save iframe HTML separately
+- [x] Record HAR files for network analysis
+- [x] Provide basic CSS selector testing
+- [x] Provide basic XPath testing
+- [x] Highlight matched elements in the browser
+- [x] Save console logs
+- [x] Save request/response summaries
 
 > DOMVault should help users understand where the target data comes from:
 > rendered DOM, iframe, network API, or browser storage.

@@ -104,6 +104,20 @@ saved_html/
 You can pass an optional snapshot name; otherwise the directory is named
 `<domain>_<YYYYMMDD_HHMMSS>`.
 
+### Debugging aids
+
+- **Selector test** — in the **Selector test** card, pick CSS or XPath, enter a
+  selector, and click **Test** to see the match count plus a few element
+  samples. **Highlight** outlines the matches in the live browser window;
+  **Clear** removes the outlines. (Main frame only.)
+- **Record HAR** — tick **Record network to HAR this session** before opening a
+  URL to capture the whole session's network in HAR format. The file is
+  finalized when you click **Close browser** and saved under `saved_html/har/`,
+  downloadable from the control panel.
+
+> DOMVault helps you see where target data comes from: rendered DOM, iframe,
+> network API, or browser storage.
+
 ---
 
 ## How it works

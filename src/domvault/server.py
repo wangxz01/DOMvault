@@ -15,6 +15,8 @@ The output directory defaults to ``./saved_html`` and is configurable via
 
 from __future__ import annotations
 
+import datetime
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -42,7 +44,7 @@ def get_output_dir() -> Path:
     return _output_dir
 
 
-app = FastAPI(title="DOMVault", version="0.2.0")
+app = FastAPI(title="DOMVault", version="0.3.0")
 
 
 # --- request/response models ---------------------------------------------
@@ -53,11 +55,25 @@ class OpenRequest(BaseModel):
     # Optional Playwright storage state (as produced by context.storage_state())
     # to restore cookies/localStorage into the new context.
     storage_state: Optional[Any] = Field(default=None)
+    # If True, record the whole session's network to a HAR file (finalized on close).
+    record_har: bool = False
 
 
 class SaveRequest(BaseModel):
     # Optional custom directory name for the snapshot.
     filename: Optional[str] = None
+
+
+class SelectorRequest(BaseModel):
+    selector: str
+    kind: str = "css"  # "css" | "xpath"
+    limit: int = 10
+
+
+class HighlightRequest(BaseModel):
+    selector: str
+    kind: str = "css"
+    color: Optional[str] = "#ff5252"
 
 
 # --- helpers -------------------------------------------------------------
@@ -95,7 +111,9 @@ async def api_open(payload: OpenRequest) -> JSONResponse:
             detail="storage_state must be an object (from a storage_state.json).",
         )
     try:
-        result = await browser.open_url(url, kind=kind, storage_state=storage_state)  # type: ignore[arg-type]
+        result = await browser.open_url(  # type: ignore[arg-type]
+            url, kind=kind, storage_state=storage_state, record_har=payload.record_har
+        )
     except browser.BrowserError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return JSONResponse(result)
@@ -266,5 +284,85 @@ async def api_download(run_name: str, file_path: str) -> FileResponse:
 
 @app.post("/api/close")
 async def api_close() -> JSONResponse:
-    await browser.close()
+    """Close the browser. If a HAR was being recorded, finalize and store it."""
+    har_tmp = await browser.close()  # str temp path, or None
+    har_info: Optional[dict] = None
+    if har_tmp:
+        src = Path(har_tmp)
+        try:
+            if src.exists() and src.stat().st_size > 0:
+                har_dir = get_output_dir() / "har"
+                har_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest = har_dir / f"session_{ts}.har"
+                shutil.move(str(src), str(dest))
+                har_info = {
+                    "filename": dest.name,
+                    "path": str(dest.resolve()),
+                    "download_url": f"/api/har/{dest.name}",
+                }
+            else:
+                src.unlink(missing_ok=True)
+        except OSError:
+            # Best-effort cleanup; never fail the close because of the HAR.
+            try:
+                if src.exists():
+                    src.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return JSONResponse({"ok": True, "har": har_info})
+
+
+# --- selector testing + highlighting -------------------------------------
+
+@app.post("/api/test-selector")
+async def api_test_selector(payload: SelectorRequest) -> JSONResponse:
+    kind = (payload.kind or "css").lower()
+    if kind not in ("css", "xpath"):
+        raise HTTPException(status_code=400, detail="kind must be 'css' or 'xpath'.")
+    if not payload.selector:
+        raise HTTPException(status_code=400, detail="selector is required.")
+    try:
+        result = await browser.test_selector(payload.selector, kind=kind, limit=payload.limit)  # type: ignore[arg-type]
+    except browser.BrowserError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return JSONResponse(result)
+
+
+@app.post("/api/highlight")
+async def api_highlight(payload: HighlightRequest) -> JSONResponse:
+    kind = (payload.kind or "css").lower()
+    if kind not in ("css", "xpath"):
+        raise HTTPException(status_code=400, detail="kind must be 'css' or 'xpath'.")
+    try:
+        result = await browser.highlight(payload.selector, kind=kind, color=payload.color or "#ff5252")  # type: ignore[arg-type]
+    except browser.BrowserError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return JSONResponse(result)
+
+
+@app.post("/api/clear-highlight")
+async def api_clear_highlight() -> JSONResponse:
+    try:
+        await browser.clear_highlight()
+    except browser.BrowserError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return JSONResponse({"ok": True})
+
+
+# --- HAR download --------------------------------------------------------
+
+@app.get("/api/har/{filename}")
+async def api_har(filename: str) -> FileResponse:
+    """Download a finalized session HAR file from the output dir's har/ folder."""
+    if _bad_segment(filename) or not filename.lower().endswith(".har"):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    target = (get_output_dir() / "har" / filename).resolve()
+    base = (get_output_dir() / "har").resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="HAR file not found.")
+    return FileResponse(str(target), media_type="application/json", filename=filename)

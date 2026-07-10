@@ -91,6 +91,18 @@
   .snap-item .info { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .snap-item a { color: var(--accent); }
   code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .chk input { width: auto; margin: 0; }
+  .sel-result {
+    background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 12px; font-size: 13px;
+  }
+  .sel-result .count { font-weight: 600; color: var(--ink); }
+  .sel-result .samples { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .sel-result .sample {
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink);
+    background: #fff; border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px;
+    word-break: break-all;
+  }
+  .sel-result .sample .txt { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -114,6 +126,13 @@
       <span class="sub" style="align-self:center">load a previous <code>storage_state.json</code></span>
     </div>
 
+    <div class="row" style="margin-top:12px; align-items:center">
+      <label class="chk" style="margin:0; display:flex; align-items:center; gap:6px; font-weight:400; color:var(--ink)">
+        <input id="harChk" type="checkbox" /> Record network to HAR this session
+      </label>
+      <span class="sub">(finalized on Close)</span>
+    </div>
+
     <div class="status" style="margin-top:14px">
       <span id="dot" class="dot"></span>
       <span id="statusText" class="status-text">No browser session.</span>
@@ -133,6 +152,23 @@
     <div id="result" class="result hidden" style="margin-top:14px"></div>
   </section>
 
+  <!-- DEBUG -->
+  <section class="card">
+    <label>Selector test (main frame)</label>
+    <div class="row">
+      <select id="selKind" style="max-width:110px; padding:10px; font-size:14px; border:1px solid var(--border); border-radius:8px; font-family:inherit; background:#fff">
+        <option value="css">CSS</option>
+        <option value="xpath">XPath</option>
+      </select>
+      <input id="selInput" type="text" placeholder="e.g. li.item  or  //li[@class='item']" autocomplete="off" />
+      <button id="testBtn" class="btn-primary" type="button" disabled>Test</button>
+      <button id="hlBtn" class="btn-ghost" type="button" disabled>Highlight</button>
+      <button id="clrBtn" class="btn-ghost" type="button" disabled>Clear</button>
+    </div>
+    <p class="hint">Test returns the match count and a few samples; Highlight outlines matches in the browser window.</p>
+    <div id="selResult" class="sel-result hidden" style="margin-top:12px"></div>
+  </section>
+
   <!-- RECENT -->
   <section class="card">
     <label>Recent snapshots</label>
@@ -149,6 +185,10 @@
   const openBtn = $("openBtn"), saveBtn = $("saveBtn"), closeBtn = $("closeBtn");
   const dotEl = $("dot"), statusTextEl = $("statusText"), errorEl = $("error");
   const resultEl = $("result"), snapListEl = $("snapList");
+  const harChkEl = $("harChk");
+  const selKindEl = $("selKind"), selInputEl = $("selInput");
+  const testBtn = $("testBtn"), hlBtn = $("hlBtn"), clrBtn = $("clrBtn");
+  const selResultEl = $("selResult");
 
   function setError(msg) { errorEl.textContent = msg || ""; }
   function clearResult() { resultEl.classList.add("hidden"); resultEl.innerHTML = ""; }
@@ -168,11 +208,17 @@
       statusTextEl.innerHTML = "Open: <strong>" + escapeHtml(s.title || "(no title)") + "</strong> &mdash; " + escapeHtml(s.url || "");
       saveBtn.disabled = false;
       closeBtn.disabled = false;
+      testBtn.disabled = false;
+      hlBtn.disabled = false;
+      clrBtn.disabled = false;
     } else {
       dotEl.classList.remove("open");
       statusTextEl.textContent = "No browser session.";
       saveBtn.disabled = true;
       closeBtn.disabled = true;
+      testBtn.disabled = true;
+      hlBtn.disabled = true;
+      clrBtn.disabled = true;
     }
   }
 
@@ -213,7 +259,11 @@
     catch (e) { setError(e.message); return; }
     openBtn.disabled = true;
     try {
-      const s = await postJSON("/api/open", { url: url, storage_state: storageState });
+      const s = await postJSON("/api/open", {
+        url: url,
+        storage_state: storageState,
+        record_har: !!harChkEl.checked,
+      });
       renderStatus(s);
       if (storageState) setError("");  // state loaded fine
     } catch (e) {
@@ -289,12 +339,92 @@
     setError(""); clearResult();
     closeBtn.disabled = true;
     try {
-      await postJSON("/api/close", {});
+      const res = await postJSON("/api/close", {});
       await refreshStatus();
+      const har = res.har;
+      if (har && har.download_url) {
+        resultEl.classList.remove("hidden");
+        resultEl.innerHTML =
+          '<div class="run">HAR recorded</div>' +
+          '<div class="meta">' + escapeHtml(har.filename) +
+          ' &mdash; <a href="' + har.download_url + '" target="_blank">download</a></div>';
+      }
     } catch (e) {
       setError(e.message);
     } finally {
       closeBtn.disabled = false;
+    }
+  }
+
+  // --- selector testing + highlighting ---------------------------------
+
+  function renderSelResult(payload, extra) {
+    const parts = [];
+    parts.push('<div class="count">' + payload.count + ' match' + (payload.count === 1 ? "" : "es") +
+               ' for ' + escapeHtml(payload.kind.toUpperCase()) + ' <code>' + escapeHtml(payload.selector) + "</code></div>");
+    if (extra) parts.push('<div class="meta" style="margin-top:4px">' + extra + "</div>");
+    const samples = payload.samples || [];
+    if (samples.length) {
+      const items = samples.map((s) => {
+        const sig = (s.tag || "?") +
+          (s.id ? "#" + escapeHtml(s.id) : "") +
+          (s.cls ? "." + escapeHtml(String(s.cls).split(/\s+/).filter(Boolean).join(".")) : "");
+        const text = s.text ? '<span class="txt"> &mdash; ' + escapeHtml(s.text) + "</span>" : "";
+        return '<div class="sample">' + sig + text + "</div>";
+      });
+      parts.push('<div class="samples">' + items.join("") + "</div>");
+    }
+    selResultEl.innerHTML = parts.join("");
+    selResultEl.classList.remove("hidden");
+  }
+
+  async function doTest() {
+    setError("");
+    const selector = selInputEl.value;
+    if (!selector.trim()) { setError("Enter a selector to test."); return; }
+    testBtn.disabled = true;
+    try {
+      const res = await postJSON("/api/test-selector",
+        { selector: selector, kind: selKindEl.value, limit: 10 });
+      renderSelResult(res, null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      testBtn.disabled = false;
+    }
+  }
+
+  async function doHighlight() {
+    setError("");
+    const selector = selInputEl.value;
+    if (!selector.trim()) { setError("Enter a selector to highlight."); return; }
+    hlBtn.disabled = true;
+    try {
+      const res = await postJSON("/api/highlight", { selector: selector, kind: selKindEl.value });
+      const msg = "Highlighted " + res.count + " element" + (res.count === 1 ? "" : "s") +
+                  (res.error ? " (error: " + escapeHtml(res.error) + ")" : "") + " in the browser.";
+      // also run a test so the count/samples are shown
+      const test = await postJSON("/api/test-selector",
+        { selector: selector, kind: selKindEl.value, limit: 10 });
+      renderSelResult(test, msg);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      hlBtn.disabled = false;
+    }
+  }
+
+  async function doClear() {
+    setError("");
+    clrBtn.disabled = true;
+    try {
+      await postJSON("/api/clear-highlight", {});
+      selResultEl.classList.add("hidden");
+      selResultEl.innerHTML = "";
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      clrBtn.disabled = false;
     }
   }
 
@@ -334,7 +464,11 @@
   openBtn.addEventListener("click", doOpen);
   saveBtn.addEventListener("click", doSave);
   closeBtn.addEventListener("click", doClose);
+  testBtn.addEventListener("click", doTest);
+  hlBtn.addEventListener("click", doHighlight);
+  clrBtn.addEventListener("click", doClear);
   urlEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doOpen(); } });
+  selInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doTest(); } });
 
   setInterval(refreshStatus, 2000);
   refreshStatus();

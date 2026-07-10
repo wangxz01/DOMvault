@@ -13,8 +13,11 @@ Lifecycle:
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
-from typing import Literal, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
 
 from playwright.async_api import (
     Browser,
@@ -27,6 +30,7 @@ from playwright.async_api import (
 from .collectors import Collector
 
 BrowserKind = Literal["chromium", "firefox", "webkit"]
+SelectorKind = Literal["css", "xpath"]
 
 # A module-level holder keeps everything on the single asyncio event loop that
 # uvicorn runs. We never touch Playwright from another thread.
@@ -37,6 +41,7 @@ class _Session:
     context: Optional[BrowserContext] = None
     page: Optional[Page] = None
     kind: BrowserKind = "chromium"
+    har_path: Optional[str] = None  # temp HAR file path while recording; None otherwise
 
     @property
     def open(self) -> bool:
@@ -57,6 +62,7 @@ class BrowserError(RuntimeError):
 async def _ensure_started(
     kind: BrowserKind,
     storage_state: dict | list | str | None = None,
+    record_har: bool = False,
 ) -> None:
     """Ensure browser/context/page are running, applying ``storage_state`` if given.
 
@@ -64,6 +70,8 @@ async def _ensure_started(
     closed only the page/window). Only does a full restart when the browser
     process itself is gone. When ``storage_state`` is provided, a fresh context
     carrying that state is created so login cookies/localStorage are restored.
+    When ``record_har`` is True (and a new context is being created), all
+    network traffic for the session is recorded to a temp HAR file.
     """
     # Fast path: session healthy and no storage_state requested.
     if (
@@ -107,12 +115,25 @@ async def _ensure_started(
         _session.context = None
         _session.page = None
 
-    # Create context if missing, optionally seeded with storage_state.
+    # Create context if missing, optionally seeded with storage_state / HAR recording.
     if _session.context is None:
-        ctx_kwargs = {"storage_state": storage_state} if storage_state is not None else {}
+        ctx_kwargs: dict[str, Any] = {}
+        if storage_state is not None:
+            ctx_kwargs["storage_state"] = storage_state
+        # A fresh context resets any prior HAR recording state.
+        _session.har_path = None
+        if record_har:
+            fd, tmp = tempfile.mkstemp(suffix=".har", prefix="domvault_")
+            os.close(fd)
+            _session.har_path = tmp
+            ctx_kwargs["record_har_path"] = tmp
         try:
             _session.context = await _session.browser.new_context(**ctx_kwargs)
         except PlaywrightError as exc:
+            if _session.har_path and os.path.exists(_session.har_path):
+                try: os.remove(_session.har_path)
+                except OSError: pass
+            _session.har_path = None
             raise BrowserError(f"Could not create browser context: {exc}") from exc
         # Fresh context -> fresh capture. Attach network listeners now, before
         # any navigation, so we don't miss the first requests.
@@ -134,7 +155,17 @@ def _on_page_closed() -> None:
 
 
 async def _hard_stop() -> None:
-    """Close browser + playwright context unconditionally."""
+    """Close browser + playwright context unconditionally.
+
+    Closing the context first flushes any in-progress HAR recording to disk.
+    ``har_path`` is intentionally NOT cleared here so :func:`close` can still
+    read it; it is reset when a new context is created in :func:`_ensure_started`.
+    """
+    if _session.context is not None:
+        try:
+            await _session.context.close()
+        except PlaywrightError:
+            pass
     if _session.browser is not None:
         try:
             await _session.browser.close()
@@ -155,15 +186,17 @@ async def open_url(
     url: str,
     kind: BrowserKind = "chromium",
     storage_state: dict | list | str | None = None,
+    record_har: bool = False,
 ) -> dict:
     """Open (or navigate) the browser to ``url``.
 
     If no browser is running, one is started headed. When ``storage_state`` is
     given (a dict from ``context.storage_state()``), the context is created with
-    that state so cookies/localStorage are restored. Returns a status dict.
-    Raises :class:`BrowserError` on navigation failure or missing binary.
+    that state so cookies/localStorage are restored. When ``record_har`` is True
+    and a new context is created, the session's network is recorded to a temp
+    HAR file (finalized on :func:`close`). Returns a status dict.
     """
-    await _ensure_started(kind, storage_state=storage_state)
+    await _ensure_started(kind, storage_state=storage_state, record_har=record_har)
     page = _session.page
     assert page is not None  # _ensure_started guarantees this
     try:
@@ -286,6 +319,118 @@ async def frame_contents() -> list[dict]:
     return out
 
 
-async def close() -> None:
-    """Close the browser and release Playwright. The server keeps running."""
+async def close() -> Optional[str]:
+    """Close the browser and release Playwright. The server keeps running.
+
+    Returns the temp HAR file path if a HAR was being recorded (the file has
+    been finalized by the context close), else None. The caller owns moving/
+    deleting that file.
+    """
+    har = _session.har_path
     await _hard_stop()
+    return har
+
+
+# --- selector testing + highlighting (main frame) ------------------------
+
+_HIGHLIGHT_JS = """
+({sel, kind, color}) => {
+  const CLEAR = () => document.querySelectorAll('.__domvault_hl__').forEach(e => {
+    e.classList.remove('__domvault_hl__');
+    e.style.outline = ''; e.style.outlineOffset = '';
+  });
+  CLEAR();
+  let arr = [];
+  try {
+    if (kind === 'xpath') {
+      const r = document.evaluate(sel, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < r.snapshotLength; i++) {
+        const n = r.snapshotItem(i);
+        if (n && n.nodeType === 1) arr.push(n);
+      }
+    } else {
+      arr = Array.from(document.querySelectorAll(sel));
+    }
+  } catch (e) {
+    return {error: String(e), count: 0};
+  }
+  arr.forEach(e => {
+    e.classList.add('__domvault_hl__');
+    e.style.outline = '3px solid ' + color;
+    e.style.outlineOffset = '1px';
+  });
+  return {count: arr.length};
+}
+"""
+
+_CLEAR_HIGHLIGHT_JS = """
+() => {
+  document.querySelectorAll('.__domvault_hl__').forEach(e => {
+    e.classList.remove('__domvault_hl__');
+    e.style.outline = ''; e.style.outlineOffset = '';
+  });
+}
+"""
+
+
+async def test_selector(
+    selector: str,
+    kind: SelectorKind = "css",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Return match count + up to ``limit`` element samples for a selector.
+
+    Operates on the main frame. Each sample has tag/id/cls/text. Raises
+    :class:`BrowserError` for an invalid selector or no open session.
+    """
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    page = _session.page
+    target = f"xpath={selector}" if kind == "xpath" else selector
+    try:
+        loc = page.locator(target)
+        count = await loc.count()
+    except PlaywrightError as exc:
+        raise BrowserError(f"Invalid selector: {exc}") from exc
+    samples: list[dict[str, Any]] = []
+    for i in range(min(count, max(0, limit))):
+        try:
+            info = await loc.nth(i).evaluate(
+                "el => ({tag: el.tagName.toLowerCase(), id: el.id || null, "
+                "cls: el.className && el.className.toString ? el.className.toString() : null, "
+                "text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').slice(0, 160)})"
+            )
+            samples.append(info)
+        except PlaywrightError:
+            samples.append({"tag": None, "text": None})
+    return {"kind": kind, "selector": selector, "count": count, "samples": samples}
+
+
+async def highlight(
+    selector: str,
+    kind: SelectorKind = "css",
+    color: str = "#ff5252",
+) -> dict[str, Any]:
+    """Outline matched elements in the live browser (main frame).
+
+    Returns ``{"count": N}`` or ``{"error": "...", "count": 0}`` for a bad
+    selector. Previous highlights are cleared first.
+    """
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    try:
+        return await _session.page.evaluate(
+            _HIGHLIGHT_JS, {"sel": selector, "kind": kind, "color": color}
+        )
+    except PlaywrightError as exc:
+        raise BrowserError(f"Highlight failed: {exc}") from exc
+
+
+async def clear_highlight() -> None:
+    """Remove all DOMVault highlight outlines from the main frame."""
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    try:
+        await _session.page.evaluate(_CLEAR_HIGHLIGHT_JS)
+    except PlaywrightError as exc:
+        raise BrowserError(f"Clear highlight failed: {exc}") from exc
