@@ -1,479 +1,436 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>DOMVault</title>
+<title>DOMVault · 网页状态抓取</title>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
 <style>
   :root {
-    --bg: #f6f7fb;
+    --bg: #f5f6fa;
     --panel: #ffffff;
-    --ink: #1a1a2e;
+    --ink: #1f2330;
     --muted: #6b7280;
     --accent: #4f46e5;
     --accent-hover: #4338ca;
     --danger: #dc2626;
     --success: #16a34a;
     --border: #e5e7eb;
-    --radius: 10px;
+    --radius: 12px;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
     background: var(--bg);
     color: var(--ink);
-    line-height: 1.5;
+    line-height: 1.55;
   }
-  .wrap { max-width: 820px; margin: 0 auto; padding: 32px 20px 64px; }
-  header h1 { font-size: 24px; margin: 0 0 4px; }
-  header p { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+  [v-cloak] { display: none; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
+  header h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: .5px; }
+  header h1 .v { color: var(--accent); }
+  header p { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
   .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    margin-bottom: 16px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px; margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.03);
   }
-  label {
-    display: block; font-size: 13px; font-weight: 600;
-    margin-bottom: 6px; color: var(--muted);
-  }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--muted); }
   .row { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
-  input[type="text"], input[type="file"] {
-    flex: 1; padding: 10px 12px; font-size: 14px;
-    border: 1px solid var(--border); border-radius: 8px; outline: none;
-    font-family: inherit; background: #fff;
+  input[type="text"], input[type="file"], select {
+    flex: 1; padding: 10px 12px; font-size: 14px; border: 1px solid var(--border);
+    border-radius: 8px; outline: none; font-family: inherit; background: #fff; color: var(--ink);
   }
-  input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
+  input[type="text"]:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
   input[type="file"] { padding: 8px 10px; font-size: 12px; color: var(--muted); }
   button {
-    padding: 10px 18px; font-size: 14px; font-weight: 600; border: none;
-    border-radius: 8px; cursor: pointer; font-family: inherit;
-    transition: background .15s, opacity .15s;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; border: none; border-radius: 8px;
+    cursor: pointer; font-family: inherit; transition: background .15s, opacity .15s, transform .05s;
   }
-  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button:active:not(:disabled) { transform: translateY(1px); }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
   .btn-save { background: var(--success); color: #fff; }
   .btn-save:hover:not(:disabled) { background: #15803d; }
   .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-  .btn-ghost:hover:not(:disabled) { background: #f3f4f6; }
-  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 20px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; flex-shrink: 0; }
-  .dot.open { background: var(--success); }
-  .status-text { color: var(--muted); word-break: break-all; }
-  .status-text strong { color: var(--ink); }
-  .error { color: var(--danger); font-size: 13px; min-height: 18px; }
+  .btn-ghost:hover:not(:disabled) { background: #f3f4f6; color: var(--ink); }
   .sub { font-size: 12px; color: var(--muted); }
   .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
-  .hidden { display: none; }
+  code { background: #eef; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
-  /* snapshot result */
-  .result {
-    background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px;
-  }
-  .result .run { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--ink); word-break: break-all; }
-  .result .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .result img.thumb {
-    margin-top: 10px; max-width: 100%; max-height: 360px; border: 1px solid var(--border);
-    border-radius: 6px; display: block; background: #fff;
-  }
-  .result .dl { margin-top: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
-  .result .dl a { color: var(--accent); font-weight: 600; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 20px; margin-top: 14px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #d1d5db; flex-shrink: 0; }
+  .dot.open { background: var(--success); box-shadow: 0 0 0 3px rgba(22,163,74,.18); }
+  .status-text { color: var(--muted); word-break: break-all; }
+  .status-text strong { color: var(--ink); }
+  .error { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 8px; }
 
-  /* snapshot list */
-  .snap-item {
-    padding: 10px 0; border-top: 1px solid var(--border); font-size: 13px;
+  .result, .sel-result, .har-result, .info-box {
+    border-radius: 9px; padding: 14px; font-size: 13px; margin-top: 14px;
   }
-  .snap-item:first-child { border-top: none; }
-  .snap-item .name { font-family: ui-monospace, Consolas, monospace; color: var(--ink); word-break: break-all; }
-  .snap-item .info { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .snap-item a { color: var(--accent); }
-  code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .result { background: #f0fdf4; border: 1px solid #bbf7d0; }
+  .sel-result { background: #eef2ff; border: 1px solid #c7d2fe; }
+  .har-result { background: #fff7ed; border: 1px solid #fed7aa; }
+  .run { font-family: ui-monospace, Consolas, monospace; color: var(--ink); word-break: break-all; font-size: 13px; }
+  .meta { color: var(--muted); margin-top: 5px; word-break: break-all; }
+  .meta strong { color: var(--ink); }
+  .counts { color: var(--ink); margin-top: 5px; font-size: 12px; }
+  img.thumb { margin-top: 10px; max-width: 100%; max-height: 380px; border: 1px solid var(--border);
+              border-radius: 6px; display: block; background: #fff; }
+  .dl { margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .dl a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .dl a:hover { text-decoration: underline; }
+  .sub-list { margin-top: 8px; }
+  .sub-item { padding: 6px 0; border-top: 1px solid var(--border); }
+  .sub-item:first-child { border-top: none; }
+  .sub-item .name { font-family: ui-monospace, Consolas, monospace; color: var(--ink); word-break: break-all; }
+  .sub-item .info { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
+  .sub-item a { color: var(--accent); }
+
+  .samples { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .sample { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink);
+            background: #fff; border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; word-break: break-all; }
+  .sample .txt { color: var(--muted); }
+  .chk { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; color: var(--ink); font-size: 13px; }
   .chk input { width: auto; margin: 0; }
-  .sel-result {
-    background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 12px; font-size: 13px;
-  }
-  .sel-result .count { font-weight: 600; color: var(--ink); }
-  .sel-result .samples { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
-  .sel-result .sample {
-    font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink);
-    background: #fff; border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px;
-    word-break: break-all;
-  }
-  .sel-result .sample .txt { color: var(--muted); }
+  .badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 10px; margin-left: 6px; }
 </style>
 </head>
 <body>
-<div class="wrap">
+<div id="app" v-cloak>
   <header>
-    <h1>DOMVault</h1>
-    <p>Open a URL with Playwright, interact with the page, then capture a snapshot of the current rendered state.</p>
+    <h1>DOM<span class="v">Vault</span></h1>
+    <p>用真实浏览器打开网页，手动操作后一键保存当前渲染状态 · 爬虫学习 / DOM 快照 / WebRPA 调试</p>
   </header>
 
-  <!-- OPEN -->
+  <!-- ① 打开网页 -->
   <section class="card">
-    <label for="url">URL</label>
+    <label>网址</label>
     <div class="row">
-      <input id="url" type="text" placeholder="example.com" autocomplete="off" />
-      <button id="openBtn" class="btn-primary" type="button">Open</button>
+      <input v-model="url" type="text" placeholder="例如 example.com（https:// 会自动补上）"
+             autocomplete="off" @keydown.enter="submitOpen" />
+      <button class="btn-primary" :disabled="opening" @click="submitOpen">
+        {{ opening ? '打开中…' : '打开' }}
+      </button>
     </div>
 
-    <label for="stateFile" style="margin-top:14px">Restore login state (optional)</label>
+    <label style="margin-top:16px">恢复登录态（可选）</label>
     <div class="row">
-      <input id="stateFile" type="file" accept=".json,application/json" />
-      <span class="sub" style="align-self:center">load a previous <code>storage_state.json</code></span>
+      <input type="file" accept=".json,application/json" @change="onStateFile" />
+      <span class="sub" style="align-self:center">载入之前的 <code>storage_state.json</code>{{ stateFileName ? ' · '+stateFileName : '' }}</span>
     </div>
 
     <div class="row" style="margin-top:12px; align-items:center">
-      <label class="chk" style="margin:0; display:flex; align-items:center; gap:6px; font-weight:400; color:var(--ink)">
-        <input id="harChk" type="checkbox" /> Record network to HAR this session
-      </label>
-      <span class="sub">(finalized on Close)</span>
+      <label class="chk"><input type="checkbox" v-model="recordHar" /> 本次会话录制 HAR</label>
+      <span class="sub">（关闭浏览器时落盘）</span>
     </div>
 
-    <div class="status" style="margin-top:14px">
-      <span id="dot" class="dot"></span>
-      <span id="statusText" class="status-text">No browser session.</span>
+    <div class="status">
+      <span class="dot" :class="{ open: status.open }"></span>
+      <span class="status-text" v-if="!status.open">未打开浏览器。</span>
+      <span class="status-text" v-else>
+        已打开：<strong>{{ status.title || '(无标题)' }}</strong> — {{ status.url }}
+      </span>
     </div>
-    <div id="error" class="error" style="margin-top:8px"></div>
+    <div class="error">{{ error }}</div>
   </section>
 
-  <!-- SAVE -->
+  <!-- ② 保存快照 -->
   <section class="card">
-    <label>Capture snapshot</label>
+    <label>保存快照</label>
     <div class="row">
-      <input id="filename" type="text" placeholder="snapshot name (optional)" autocomplete="off" style="max-width:300px" />
-      <button id="saveBtn" class="btn-save" type="button" disabled>Save snapshot</button>
-      <button id="closeBtn" class="btn-ghost" type="button" disabled>Close browser</button>
+      <input v-model="filename" type="text" placeholder="快照名（可选，默认用域名_时间戳）"
+             autocomplete="off" style="max-width:320px" @keydown.enter="doSave" />
+      <button class="btn-save" :disabled="!status.open || saving" @click="doSave">
+        {{ saving ? '保存中…' : '保存快照' }}
+      </button>
+      <button class="btn-ghost" :disabled="!status.open || closing" @click="doClose">
+        {{ closing ? '关闭中…' : '关闭浏览器' }}
+      </button>
     </div>
-    <p class="hint">Saves the rendered HTML, a full-page screenshot, storage state, frame/iframe HTML, network + console logs, and <code>metadata.json</code> into its own directory.</p>
-    <div id="result" class="result hidden" style="margin-top:14px"></div>
+    <p class="hint">把当前渲染 HTML、整页截图、登录态、frame/iframe、网络与控制台日志、<code>metadata.json</code> 一并存入独立目录。</p>
+
+    <div v-if="result" class="result">
+      <div class="run">{{ result.run_dir }}</div>
+      <div class="meta">已保存 <strong>{{ result.title || '(无标题)' }}</strong> — {{ result.url }}</div>
+      <div class="counts">
+        抓取：{{ result.counts.frames }} 个 frame ·
+        {{ result.counts.network }} 条网络事件 ·
+        {{ result.counts.console }} 条 console
+      </div>
+      <img v-if="result.downloads && result.downloads.screenshot" class="thumb"
+           :src="result.downloads.screenshot" alt="screenshot" />
+      <div class="sub-list" v-if="iframes.length">
+        <div class="sub" style="margin-top:10px">iframe：</div>
+        <div class="sub-item" v-for="f in iframes" :key="f.index">
+          <span class="name">{{ f.name || ('frame ' + f.index) }}</span>
+          <span class="info">{{ f.url || '' }} ·
+            <a :href="dl(result.run_dir, f.html_file)" target="_blank">{{ f.html_file }}</a>
+          </span>
+        </div>
+      </div>
+      <div class="dl">
+        <a v-for="l in fileLinks" :key="l.key" :href="l.url" target="_blank">{{ l.label }}</a>
+      </div>
+    </div>
+
+    <div v-if="harResult" class="har-result">
+      <div class="run">HAR 已录制</div>
+      <div class="meta">{{ harResult.filename }} ·
+        <a :href="harResult.download_url" target="_blank">下载</a>
+      </div>
+    </div>
   </section>
 
-  <!-- DEBUG -->
+  <!-- ③ 选择器调试 -->
   <section class="card">
-    <label>Selector test (main frame)</label>
+    <label>选择器调试（主框架）</label>
     <div class="row">
-      <select id="selKind" style="max-width:110px; padding:10px; font-size:14px; border:1px solid var(--border); border-radius:8px; font-family:inherit; background:#fff">
+      <select v-model="selKind" style="max-width:120px">
         <option value="css">CSS</option>
         <option value="xpath">XPath</option>
       </select>
-      <input id="selInput" type="text" placeholder="e.g. li.item  or  //li[@class='item']" autocomplete="off" />
-      <button id="testBtn" class="btn-primary" type="button" disabled>Test</button>
-      <button id="hlBtn" class="btn-ghost" type="button" disabled>Highlight</button>
-      <button id="clrBtn" class="btn-ghost" type="button" disabled>Clear</button>
+      <input v-model="selector" type="text"
+             :placeholder="selKind === 'xpath' ? \"例如 //li[@class='item']\" : '例如 li.item'"
+             autocomplete="off" @keydown.enter="doTest" />
+      <button class="btn-primary" :disabled="!status.open || testing" @click="doTest">
+        {{ testing ? '测试中…' : '测试' }}
+      </button>
+      <button class="btn-ghost" :disabled="!status.open" @click="doHighlight">高亮</button>
+      <button class="btn-ghost" :disabled="!status.open" @click="doClear">清除</button>
     </div>
-    <p class="hint">Test returns the match count and a few samples; Highlight outlines matches in the browser window.</p>
-    <div id="selResult" class="sel-result hidden" style="margin-top:12px"></div>
+    <p class="hint">测试返回匹配数量与若干元素样本；高亮会在浏览器窗口里给匹配项加描边。</p>
+    <div v-if="selResult" class="sel-result">
+      <div><strong>{{ selResult.count }}</strong> 个匹配 ·
+        {{ selResult.kind.toUpperCase() }} <code>{{ selResult.selector }}</code></div>
+      <div v-if="selNote" class="meta" style="margin-top:4px">{{ selNote }}</div>
+      <div class="samples">
+        <div class="sample" v-for="(s, i) in selResult.samples" :key="i">
+          {{ s.tag || '?' }}<span v-if="s.id">#{{ s.id }}</span><span v-if="s.cls">.{{ clsShort(s.cls) }}</span>
+          <span class="txt" v-if="s.text"> — {{ s.text }}</span>
+        </div>
+      </div>
+    </div>
   </section>
 
-  <!-- RECENT -->
+  <!-- ④ 历史快照 -->
   <section class="card">
-    <label>Recent snapshots</label>
-    <div id="snapList"><span class="sub">No snapshots yet.</span></div>
+    <label>历史快照</label>
+    <div v-if="!snapshots.length"><span class="sub">还没有快照。</span></div>
+    <div v-else>
+      <div class="sub-item" v-for="s in snapshots" :key="s.name">
+        <div class="name">{{ s.name }}</div>
+        <div class="info" v-if="s.metadata">
+          {{ s.metadata.url }}<span v-if="s.metadata.title"> — {{ s.metadata.title }}</span>
+        </div>
+        <div class="info">
+          <a :href="'/api/download/' + encodeURIComponent(s.name) + '/page.html'" target="_blank">html</a>
+          <template v-if="s.metadata">
+            <template v-if="s.metadata.screenshot_file"> · <a :href="snapDl(s.name,'screenshot.png')" target="_blank">截图</a></template>
+            <template v-if="s.metadata.frames_file"> · <a :href="snapDl(s.name,'frames.json')" target="_blank">frames</a></template>
+            <template v-if="s.metadata.network_file"> · <a :href="snapDl(s.name,'network.jsonl')" target="_blank">网络</a></template>
+            <template v-if="s.metadata.console_file"> · <a :href="snapDl(s.name,'console.log')" target="_blank">console</a></template>
+            <template v-if="s.metadata.storage_state_file"> · <a :href="snapDl(s.name,'storage_state.json')" target="_blank">登录态</a></template>
+          </template>
+          <span v-if="s.metadata && (s.metadata.frame_count || s.metadata.network_event_count || s.metadata.console_event_count)" class="sub">
+             · {{ s.metadata.frame_count }}f · {{ s.metadata.network_event_count }}net · {{ s.metadata.console_event_count }}con
+          </span>
+        </div>
+      </div>
+    </div>
   </section>
 </div>
 
 <script>
-(function () {
-  "use strict";
+const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
 
-  const $ = (id) => document.getElementById(id);
-  const urlEl = $("url"), stateFileEl = $("stateFile"), filenameEl = $("filename");
-  const openBtn = $("openBtn"), saveBtn = $("saveBtn"), closeBtn = $("closeBtn");
-  const dotEl = $("dot"), statusTextEl = $("statusText"), errorEl = $("error");
-  const resultEl = $("result"), snapListEl = $("snapList");
-  const harChkEl = $("harChk");
-  const selKindEl = $("selKind"), selInputEl = $("selInput");
-  const testBtn = $("testBtn"), hlBtn = $("hlBtn"), clrBtn = $("clrBtn");
-  const selResultEl = $("selResult");
+createApp({
+  setup() {
+    const status = ref({ open: false, url: null, title: null });
+    const error = ref("");
+    const result = ref(null);
+    const harResult = ref(null);
+    const selResult = ref(null);
+    const selNote = ref("");
+    const snapshots = ref([]);
 
-  function setError(msg) { errorEl.textContent = msg || ""; }
-  function clearResult() { resultEl.classList.add("hidden"); resultEl.innerHTML = ""; }
-  function escapeHtml(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;").replace(/'/g,"#39;");
-  }
-  function isoShort(iso) {
-    if (!iso) return "";
-    try { return new Date(iso).toLocaleString(); } catch { return iso; }
-  }
+    const url = ref("");
+    const recordHar = ref(false);
+    const stateFileName = ref("");
+    let stateFileObj = null;
+    const filename = ref("");
+    const selKind = ref("css");
+    const selector = ref("");
 
-  function renderStatus(s) {
-    if (s.open) {
-      dotEl.classList.add("open");
-      statusTextEl.innerHTML = "Open: <strong>" + escapeHtml(s.title || "(no title)") + "</strong> &mdash; " + escapeHtml(s.url || "");
-      saveBtn.disabled = false;
-      closeBtn.disabled = false;
-      testBtn.disabled = false;
-      hlBtn.disabled = false;
-      clrBtn.disabled = false;
-    } else {
-      dotEl.classList.remove("open");
-      statusTextEl.textContent = "No browser session.";
-      saveBtn.disabled = true;
-      closeBtn.disabled = true;
-      testBtn.disabled = true;
-      hlBtn.disabled = true;
-      clrBtn.disabled = true;
-    }
-  }
+    const opening = ref(false), saving = ref(false), closing = ref(false);
+    const testing = ref(false);
 
-  async function postJSON(path, body) {
-    const resp = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    const data = await resp.json().catch(() => ({ detail: "Invalid server response." }));
-    if (!resp.ok) {
-      const detail = data.detail || ("HTTP " + resp.status);
-      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
-    }
-    return data;
-  }
+    function setError(msg) { error.value = msg || ""; }
 
-  function readStateFile() {
-    return new Promise((resolve, reject) => {
-      const file = stateFileEl.files && stateFileEl.files[0];
-      if (!file) { resolve(null); return; }
-      const reader = new FileReader();
-      reader.onload = () => {
-        try { resolve(JSON.parse(reader.result)); }
-        catch (e) { reject(new Error("storage_state file is not valid JSON.")); }
-      };
-      reader.onerror = () => reject(new Error("Could not read storage_state file."));
-      reader.readAsText(file);
-    });
-  }
-
-  async function doOpen() {
-    setError(""); clearResult();
-    const url = urlEl.value.trim();
-    if (!url) { setError("Please enter a URL."); return; }
-    let storageState = null;
-    try { storageState = await readStateFile(); }
-    catch (e) { setError(e.message); return; }
-    openBtn.disabled = true;
-    try {
-      const s = await postJSON("/api/open", {
-        url: url,
-        storage_state: storageState,
-        record_har: !!harChkEl.checked,
+    async function postJSON(path, body) {
+      const resp = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
       });
-      renderStatus(s);
-      if (storageState) setError("");  // state loaded fine
-    } catch (e) {
-      setError(e.message);
-      await refreshStatus();
-    } finally {
-      openBtn.disabled = false;
-    }
-  }
-
-  function renderResult(payload) {
-    const dl = payload.downloads || {};
-    const counts = payload.counts || {};
-    const meta = payload.metadata || {};
-    const LABELS = { html: "page.html", screenshot: "screenshot.png", storage_state: "storage_state.json",
-                     frames: "frames.json", network: "network.jsonl", console: "console.log",
-                     metadata: "metadata.json" };
-    const links = Object.keys(LABELS)
-      .filter((k) => dl[k])
-      .map((k) => '<a href="' + dl[k] + '" target="_blank">' + LABELS[k] + '</a>');
-
-    const parts = [];
-    parts.push('<div class="run">' + escapeHtml(payload.run_dir) + '</div>');
-    parts.push('<div class="meta">Saved <strong>' + escapeHtml(payload.title || "(no title)") +
-      '</strong> &mdash; ' + escapeHtml(payload.url) +
-      (meta.saved_at ? ' &middot; ' + escapeHtml(isoShort(meta.saved_at)) : '') + '</div>');
-
-    // capture counts
-    const cBits = [];
-    if (counts.frames != null) cBits.push(counts.frames + ' frame' + (counts.frames === 1 ? '' : 's'));
-    if (counts.network != null) cBits.push(counts.network + ' network events');
-    if (counts.console != null) cBits.push(counts.console + ' console msgs');
-    if (cBits.length) parts.push('<div class="meta">Captured: ' + cBits.join(' · ') + '</div>');
-
-    if (dl.screenshot) {
-      parts.push('<img class="thumb" src="' + dl.screenshot + '" alt="screenshot" />');
-    }
-
-    // iframe list
-    const frames = payload.frames || [];
-    const iframes = frames.filter((f) => !f.is_main && f.html_file);
-    if (iframes.length) {
-      const items = iframes.map((f) => {
-        const href = "/api/download/" + encodeURIComponent(payload.run_dir) + "/" + f.html_file;
-        const label = f.name ? escapeHtml(f.name) : "frame " + f.index;
-        return '<div class="snap-item"><span class="name">' + label + '</span>' +
-               '<span class="info">' + escapeHtml(f.url || "") +
-               ' &middot; <a href="' + href + '" target="_blank">' + escapeHtml(f.html_file) + '</a></span></div>';
-      });
-      parts.push('<div class="meta" style="margin-top:8px">Iframes:</div><div style="margin-top:4px">' + items.join("") + '</div>');
-    }
-
-    parts.push('<div class="dl">' + links.join("") + '</div>');
-    resultEl.innerHTML = parts.join("");
-    resultEl.classList.remove("hidden");
-  }
-
-  async function doSave() {
-    setError("");
-    saveBtn.disabled = true;
-    try {
-      const payload = await postJSON("/api/save", { filename: filenameEl.value.trim() || null });
-      renderResult(payload);
-      await refreshSnapshots();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      saveBtn.disabled = false;
-    }
-  }
-
-  async function doClose() {
-    setError(""); clearResult();
-    closeBtn.disabled = true;
-    try {
-      const res = await postJSON("/api/close", {});
-      await refreshStatus();
-      const har = res.har;
-      if (har && har.download_url) {
-        resultEl.classList.remove("hidden");
-        resultEl.innerHTML =
-          '<div class="run">HAR recorded</div>' +
-          '<div class="meta">' + escapeHtml(har.filename) +
-          ' &mdash; <a href="' + har.download_url + '" target="_blank">download</a></div>';
+      let data = {};
+      try { data = await resp.json(); } catch (e) { data = { detail: "服务器响应无效。" }; }
+      if (!resp.ok) {
+        const d = data.detail || ("HTTP " + resp.status);
+        throw new Error(typeof d === "string" ? d : JSON.stringify(d));
       }
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      closeBtn.disabled = false;
+      return data;
     }
-  }
 
-  // --- selector testing + highlighting ---------------------------------
+    function onStateFile(e) {
+      const f = e.target.files && e.target.files[0];
+      stateFileObj = f || null;
+      stateFileName.value = f ? f.name : "";
+    }
 
-  function renderSelResult(payload, extra) {
-    const parts = [];
-    parts.push('<div class="count">' + payload.count + ' match' + (payload.count === 1 ? "" : "es") +
-               ' for ' + escapeHtml(payload.kind.toUpperCase()) + ' <code>' + escapeHtml(payload.selector) + "</code></div>");
-    if (extra) parts.push('<div class="meta" style="margin-top:4px">' + extra + "</div>");
-    const samples = payload.samples || [];
-    if (samples.length) {
-      const items = samples.map((s) => {
-        const sig = (s.tag || "?") +
-          (s.id ? "#" + escapeHtml(s.id) : "") +
-          (s.cls ? "." + escapeHtml(String(s.cls).split(/\s+/).filter(Boolean).join(".")) : "");
-        const text = s.text ? '<span class="txt"> &mdash; ' + escapeHtml(s.text) + "</span>" : "";
-        return '<div class="sample">' + sig + text + "</div>";
+    function readStateFile() {
+      return new Promise((resolve, reject) => {
+        if (!stateFileObj) { resolve(null); return; }
+        const r = new FileReader();
+        r.onload = () => {
+          try { resolve(JSON.parse(r.result)); }
+          catch (err) { reject(new Error("storage_state 文件不是有效的 JSON。")); }
+        };
+        r.onerror = () => reject(new Error("无法读取 storage_state 文件。"));
+        r.readAsText(stateFileObj);
       });
-      parts.push('<div class="samples">' + items.join("") + "</div>");
     }
-    selResultEl.innerHTML = parts.join("");
-    selResultEl.classList.remove("hidden");
-  }
 
-  async function doTest() {
-    setError("");
-    const selector = selInputEl.value;
-    if (!selector.trim()) { setError("Enter a selector to test."); return; }
-    testBtn.disabled = true;
-    try {
-      const res = await postJSON("/api/test-selector",
-        { selector: selector, kind: selKindEl.value, limit: 10 });
-      renderSelResult(res, null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      testBtn.disabled = false;
+    async function submitOpen() {
+      setError(""); result.value = null; harResult.value = null;
+      if (!url.value.trim()) { setError("请输入网址。"); return; }
+      let st = null;
+      try { st = await readStateFile(); }
+      catch (err) { setError(err.message); return; }
+      opening.value = true;
+      try {
+        const s = await postJSON("/api/open", {
+          url: url.value, storage_state: st, record_har: !!recordHar.value,
+        });
+        status.value = s;
+      } catch (err) {
+        setError(err.message);
+        await refreshStatus();
+      } finally { opening.value = false; }
     }
-  }
 
-  async function doHighlight() {
-    setError("");
-    const selector = selInputEl.value;
-    if (!selector.trim()) { setError("Enter a selector to highlight."); return; }
-    hlBtn.disabled = true;
-    try {
-      const res = await postJSON("/api/highlight", { selector: selector, kind: selKindEl.value });
-      const msg = "Highlighted " + res.count + " element" + (res.count === 1 ? "" : "s") +
-                  (res.error ? " (error: " + escapeHtml(res.error) + ")" : "") + " in the browser.";
-      // also run a test so the count/samples are shown
-      const test = await postJSON("/api/test-selector",
-        { selector: selector, kind: selKindEl.value, limit: 10 });
-      renderSelResult(test, msg);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      hlBtn.disabled = false;
+    const fileLinks = computed(() => {
+      if (!result.value || !result.value.downloads) return [];
+      const LABELS = { html: "page.html", screenshot: "截图", storage_state: "登录态",
+                       frames: "frames.json", network: "network.jsonl", console: "console.log",
+                       metadata: "metadata.json" };
+      const out = [];
+      for (const k of Object.keys(LABELS)) {
+        if (result.value.downloads[k]) out.push({ key: k, label: LABELS[k], url: result.value.downloads[k] });
+      }
+      return out;
+    });
+
+    const iframes = computed(() => {
+      if (!result.value || !result.value.frames) return [];
+      return result.value.frames.filter((f) => !f.is_main && f.html_file);
+    });
+
+    function dl(run, file) { return "/api/download/" + encodeURIComponent(run) + "/" + file; }
+    function snapDl(run, file) { return "/api/download/" + encodeURIComponent(run) + "/" + file; }
+    function clsShort(c) {
+      return String(c || "").split(/\s+/).filter(Boolean).join(".");
     }
-  }
 
-  async function doClear() {
-    setError("");
-    clrBtn.disabled = true;
-    try {
-      await postJSON("/api/clear-highlight", {});
-      selResultEl.classList.add("hidden");
-      selResultEl.innerHTML = "";
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      clrBtn.disabled = false;
+    async function doSave() {
+      setError("");
+      saving.value = true;
+      try {
+        const payload = await postJSON("/api/save", { filename: filename.value.trim() || null });
+        result.value = payload;
+        harResult.value = null;
+        await refreshSnapshots();
+      } catch (err) { setError(err.message); }
+      finally { saving.value = false; }
     }
-  }
 
-  async function refreshStatus() {
-    try { renderStatus(await (await fetch("/api/status")).json()); }
-    catch { /* server unreachable */ }
-  }
+    async function doClose() {
+      setError("");
+      closing.value = true;
+      try {
+        const res = await postJSON("/api/close", {});
+        await refreshStatus();
+        if (res && res.har && res.har.download_url) {
+          result.value = null;
+          harResult.value = res.har;
+        }
+      } catch (err) { setError(err.message); }
+      finally { closing.value = false; }
+    }
 
-  async function refreshSnapshots() {
-    try {
-      const data = await (await fetch("/api/snapshots")).json();
-      const snaps = data.snapshots || [];
-      if (!snaps.length) { snapListEl.innerHTML = '<span class="sub">No snapshots yet.</span>'; return; }
-      snapListEl.innerHTML = snaps.slice(0, 20).map((s) => {
-        const m = s.metadata || {};
-        const name = escapeHtml(s.name);
-        const title = m.title ? escapeHtml(m.title) : "";
-        const url = m.url ? '<span class="info">' + escapeHtml(m.url) + (title ? ' &mdash; ' + title : '') + '</span>' : '';
-        const pfx = "/api/download/" + encodeURIComponent(s.name) + "/";
-        const links = ['<a href="' + pfx + 'page.html" target="_blank">html</a>'];
-        if (m.screenshot_file) links.push('<a href="' + pfx + 'screenshot.png" target="_blank">screenshot</a>');
-        if (m.frames_file) links.push('<a href="' + pfx + 'frames.json" target="_blank">frames</a>');
-        if (m.network_file) links.push('<a href="' + pfx + 'network.jsonl" target="_blank">network</a>');
-        if (m.console_file) links.push('<a href="' + pfx + 'console.log" target="_blank">console</a>');
-        if (m.storage_state_file) links.push('<a href="' + pfx + 'storage_state.json" target="_blank">state</a>');
-        const cBits = [];
-        if (m.frame_count) cBits.push(m.frame_count + ' frame' + (m.frame_count === 1 ? '' : 's'));
-        if (m.network_event_count) cBits.push(m.network_event_count + ' net');
-        if (m.console_event_count) cBits.push(m.console_event_count + ' console');
-        const counts = cBits.length ? '<span class="info"> &middot; ' + cBits.join(' · ') + '</span>' : '';
-        return '<div class="snap-item"><div class="name">' + name + '</div>' + url +
-               '<div class="info">' + links.join(" · ") + counts + '</div></div>';
-      }).join("");
-    } catch { /* ignore */ }
-  }
+    async function doTest() {
+      setError(""); selNote.value = "";
+      if (!selector.value.trim()) { setError("请输入要测试的选择器。"); return; }
+      testing.value = true;
+      try {
+        selResult.value = await postJSON("/api/test-selector",
+          { selector: selector.value, kind: selKind.value, limit: 10 });
+      } catch (err) { setError(err.message); }
+      finally { testing.value = false; }
+    }
 
-  openBtn.addEventListener("click", doOpen);
-  saveBtn.addEventListener("click", doSave);
-  closeBtn.addEventListener("click", doClose);
-  testBtn.addEventListener("click", doTest);
-  hlBtn.addEventListener("click", doHighlight);
-  clrBtn.addEventListener("click", doClear);
-  urlEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doOpen(); } });
-  selInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doTest(); } });
+    async function doHighlight() {
+      setError(""); selNote.value = "";
+      if (!selector.value.trim()) { setError("请输入要高亮的选择器。"); return; }
+      try {
+        const r = await postJSON("/api/highlight", { selector: selector.value, kind: selKind.value });
+        selNote.value = "已在浏览器中高亮 " + r.count + " 个元素" + (r.error ? "（错误：" + r.error + "）" : "") + "。";
+        selResult.value = await postJSON("/api/test-selector",
+          { selector: selector.value, kind: selKind.value, limit: 10 });
+      } catch (err) { setError(err.message); }
+    }
 
-  setInterval(refreshStatus, 2000);
-  refreshStatus();
-  refreshSnapshots();
-})();
+    async function doClear() {
+      setError("");
+      try {
+        await postJSON("/api/clear-highlight", {});
+        selNote.value = "";
+        selResult.value = null;
+      } catch (err) { setError(err.message); }
+    }
+
+    async function refreshStatus() {
+      try { status.value = await (await fetch("/api/status")).json(); }
+      catch (e) { /* server unreachable */ }
+    }
+
+    async function refreshSnapshots() {
+      try {
+        const data = await (await fetch("/api/snapshots")).json();
+        snapshots.value = data.snapshots || [];
+      } catch (e) { /* ignore */ }
+    }
+
+    let statusTimer = null;
+    onMounted(() => {
+      refreshStatus();
+      refreshSnapshots();
+      statusTimer = setInterval(refreshStatus, 2000);
+    });
+    onUnmounted(() => { if (statusTimer) clearInterval(statusTimer); });
+
+    return {
+      status, error, result, harResult, selResult, selNote, snapshots,
+      url, recordHar, stateFileName, filename, selKind, selector,
+      opening, saving, closing, testing,
+      fileLinks, iframes,
+      onStateFile, submitOpen, doSave, doClose, doTest, doHighlight, doClear,
+      dl, snapDl, clsShort,
+    };
+  },
+}).mount("#app");
 </script>
 </body>
 </html>

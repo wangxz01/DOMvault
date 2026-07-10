@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import socket
 import sys
 from pathlib import Path
 
@@ -83,6 +84,32 @@ def _build_capture_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _find_free_port(host: str, start: int, attempts: int = 100) -> int:
+    """Return the first bindable port at/after ``start``; raises if none found.
+
+    Probes by binding a socket to ``host``:port`` and closing it immediately.
+    Note: there's an inherent TOCTOU race between this check and uvicorn's
+    bind, but it's fine for a local single-user tool.
+    """
+    last_err: Exception | None = None
+    for off in range(attempts):
+        port = start + off
+        if port > 65535:
+            break
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # NB: do NOT set SO_REUSEADDR here — on Windows it allows
+                # double-binding and would falsely report a busy port as free.
+                s.bind((host, port))
+                return port
+        except OSError as exc:
+            last_err = exc
+            continue
+    raise SystemExit(
+        f"找不到空闲端口（已尝试 {host}:{start}~{start + attempts - 1}）：{last_err}"
+    )
+
+
 def _run_serve(argv: list[str]) -> int:
     args = _build_serve_parser().parse_args(argv)
     import uvicorn
@@ -92,13 +119,21 @@ def _run_serve(argv: list[str]) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     set_output_dir(out_dir)
 
-    print(f"DOMVault {__version__} — control panel", file=sys.stderr)
-    print(f"  http://{args.host}:{args.port}", file=sys.stderr)
-    print(f"  saved HTML to:  {out_dir}", file=sys.stderr)
-    print(f"  browser engine: {args.browser}", file=sys.stderr)
-    print("  Press Ctrl+C to stop.", file=sys.stderr)
+    port = _find_free_port(args.host, args.port)
+    url = f"http://{args.host}:{port}"
+    redirected = port != args.port
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    print(f"DOMVault {__version__} — 控制台", file=sys.stderr)
+    if redirected:
+        print(f"  端口 {args.port} 被占用，已改用 {port}。", file=sys.stderr)
+    print("=" * 54, file=sys.stderr)
+    print(f"   在浏览器打开：  {url}", file=sys.stderr)
+    print("=" * 54, file=sys.stderr)
+    print(f"  快照保存到： {out_dir}", file=sys.stderr)
+    print(f"  浏览器内核： {args.browser}", file=sys.stderr)
+    print("  按 Ctrl+C 退出。", file=sys.stderr)
+
+    uvicorn.run(app, host=args.host, port=port, log_level="warning")
     return 0
 
 
