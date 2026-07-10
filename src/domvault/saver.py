@@ -24,7 +24,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 TOOL = "DOMVault"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 class InvalidURL(ValueError):
@@ -138,6 +138,78 @@ def resolve_unique_run_dir(base_out: Path, name: str) -> Path:
     return candidate
 
 
+# --- frame / network / console artifact helpers --------------------------
+
+def _frame_slug(name: str, url: str) -> str:
+    """Filesystem-safe slug for a frame, preferring its name then its domain."""
+    src = (name or "").strip()
+    if not src and url:
+        src = domain_slug(url)
+    if not src:
+        src = "frame"
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", src)
+    slug = re.sub(r"_+", "_", slug).strip("._-")
+    return slug[:40] or "frame"
+
+
+def write_frames(run_dir: Path, frames: Optional[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Write ``frames.json`` and one HTML file per non-main frame.
+
+    The main frame's HTML is ``page.html`` (written by the caller), so only
+    iframe HTML is written under ``frames/``. Returns the frame index list
+    stored in ``frames.json``.
+    """
+    index: list[dict[str, Any]] = []
+    frames_dir = run_dir / "frames"
+    for fr in frames or []:
+        entry = {
+            "index": fr.get("index"),
+            "name": fr.get("name", "") or "",
+            "url": fr.get("url", "") or "",
+            "is_main": bool(fr.get("is_main")),
+            "html_file": None,
+        }
+        html = fr.get("html")
+        if not entry["is_main"] and html:
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            fname = f"{entry['index']:03d}_{_frame_slug(entry['name'], entry['url'])}.html"
+            (frames_dir / fname).write_text(html, encoding="utf-8")
+            entry["html_file"] = f"frames/{fname}"
+        index.append(entry)
+    (run_dir / "frames.json").write_text(
+        json.dumps({"frames": index}, indent=2, default=str), encoding="utf-8"
+    )
+    return index
+
+
+def write_network_jsonl(run_dir: Path, events: Optional[list[dict[str, Any]]]) -> int:
+    """Write ``network.jsonl`` (one JSON object per line). Returns count written."""
+    lines: list[str] = []
+    for ev in events or []:
+        try:
+            lines.append(json.dumps(ev, default=str))
+        except (TypeError, ValueError):
+            continue
+    (run_dir / "network.jsonl").write_text(
+        ("\n".join(lines) + "\n") if lines else "", encoding="utf-8"
+    )
+    return len(lines)
+
+
+def write_console_log(run_dir: Path, events: Optional[list[dict[str, Any]]]) -> int:
+    """Write ``console.log`` as human-readable ``[ts] [LEVEL] text`` lines."""
+    lines: list[str] = []
+    for ev in events or []:
+        ts = ev.get("ts", "")
+        level = str(ev.get("level", "log")).upper()
+        text = ev.get("text", "")
+        lines.append(f"[{ts}] [{level}] {text}")
+    (run_dir / "console.log").write_text(
+        ("\n".join(lines) + "\n") if lines else "", encoding="utf-8"
+    )
+    return len(lines)
+
+
 # --- metadata ------------------------------------------------------------
 
 def build_metadata(
@@ -148,6 +220,9 @@ def build_metadata(
     when: Optional[datetime.datetime] = None,
     has_screenshot: bool = False,
     has_storage_state: bool = False,
+    frame_count: int = 0,
+    network_count: int = 0,
+    console_count: int = 0,
 ) -> dict[str, Any]:
     """Build the ``metadata.json`` content for a snapshot."""
     return {
@@ -160,6 +235,12 @@ def build_metadata(
         "html_file": "page.html",
         "screenshot_file": "screenshot.png" if has_screenshot else None,
         "storage_state_file": "storage_state.json" if has_storage_state else None,
+        "frames_file": "frames.json" if frame_count else None,
+        "frame_count": frame_count,
+        "network_file": "network.jsonl" if network_count else None,
+        "network_event_count": network_count,
+        "console_file": "console.log" if console_count else None,
+        "console_event_count": console_count,
     }
 
 
@@ -173,14 +254,18 @@ def save_snapshot(
     out_dir: Path,
     screenshot_png: Optional[bytes] = None,
     storage_state: Optional[dict[str, Any]] = None,
+    frames: Optional[list[dict[str, Any]]] = None,
+    network_events: Optional[list[dict[str, Any]]] = None,
+    console_events: Optional[list[dict[str, Any]]] = None,
     custom_name: Optional[str] = None,
     when: Optional[datetime.datetime] = None,
 ) -> tuple[Path, dict[str, Any]]:
     """Write a snapshot directory with page.html (+ optional artifacts).
 
-    Always writes ``page.html`` and ``metadata.json``. Writes
-    ``screenshot.png`` and ``storage_state.json`` only when the corresponding
-    argument is provided. Returns ``(run_dir_path, metadata_dict)``.
+    Always writes ``page.html``, ``metadata.json``. Optionally writes
+    ``screenshot.png``, ``storage_state.json``, ``frames.json`` (+ per-iframe
+    HTML under ``frames/``), ``network.jsonl``, and ``console.log``.
+    Returns ``(run_dir_path, metadata_dict)``.
 
     Collisions on the resolved directory name are de-duplicated via ``_2``,
     ``_3`` suffixes.
@@ -199,6 +284,9 @@ def save_snapshot(
         (run_dir / "storage_state.json").write_text(
             json.dumps(storage_state, indent=2, default=str), encoding="utf-8"
         )
+    frame_index = write_frames(run_dir, frames) if frames else []
+    net_count = write_network_jsonl(run_dir, network_events) if network_events else 0
+    cons_count = write_console_log(run_dir, console_events) if console_events else 0
 
     metadata = build_metadata(
         url=url,
@@ -207,7 +295,11 @@ def save_snapshot(
         when=when,
         has_screenshot=screenshot_png is not None,
         has_storage_state=storage_state is not None,
+        frame_count=len(frame_index),
+        network_count=net_count,
+        console_count=cons_count,
     )
+    metadata["frames"] = frame_index  # inline the frame index for convenience
     (run_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, default=str), encoding="utf-8"
     )

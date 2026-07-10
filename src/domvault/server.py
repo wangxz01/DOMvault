@@ -124,6 +124,16 @@ async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
         storage_state = await browser.current_storage_state()
     except browser.BrowserError:
         storage_state = None
+    # Frames (main + iframes) for separate iframe HTML capture.
+    frames: Optional[list] = None
+    try:
+        frames = await browser.frame_contents()
+    except browser.BrowserError:
+        frames = None
+    # Point-in-time snapshot of network + console events for the run so far.
+    collector = browser.get_collector()
+    network_events = list(collector.network)
+    console_events = list(collector.console)
 
     try:
         run_dir, metadata = save_snapshot(
@@ -133,6 +143,9 @@ async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
             out_dir=get_output_dir(),
             screenshot_png=screenshot_png,
             storage_state=storage_state,
+            frames=frames,
+            network_events=network_events,
+            console_events=console_events,
             custom_name=payload.filename,
         )
     except ValueError as exc:
@@ -147,6 +160,12 @@ async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
         downloads["screenshot"] = f"/api/download/{run_name}/screenshot.png"
     if storage_state is not None:
         downloads["storage_state"] = f"/api/download/{run_name}/storage_state.json"
+    if metadata.get("frames_file"):
+        downloads["frames"] = f"/api/download/{run_name}/{metadata['frames_file']}"
+    if metadata.get("network_file"):
+        downloads["network"] = f"/api/download/{run_name}/{metadata['network_file']}"
+    if metadata.get("console_file"):
+        downloads["console"] = f"/api/download/{run_name}/{metadata['console_file']}"
 
     return JSONResponse({
         "ok": True,
@@ -158,7 +177,16 @@ async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
             "html": "page.html",
             "screenshot": "screenshot.png" if screenshot_png is not None else None,
             "storage_state": "storage_state.json" if storage_state is not None else None,
+            "frames": metadata.get("frames_file"),
+            "network": metadata.get("network_file"),
+            "console": metadata.get("console_file"),
         },
+        "counts": {
+            "frames": metadata.get("frame_count", 0),
+            "network": metadata.get("network_event_count", 0),
+            "console": metadata.get("console_event_count", 0),
+        },
+        "frames": metadata.get("frames", []),
         "downloads": downloads,
         "metadata": metadata,
     })
@@ -167,6 +195,16 @@ async def api_save(payload: Optional[SaveRequest] = None) -> JSONResponse:
 @app.get("/api/status")
 async def api_status() -> JSONResponse:
     return JSONResponse(await browser.status())
+
+
+@app.get("/api/frames")
+async def api_frames() -> JSONResponse:
+    """List all frames (main + iframes) currently in the page."""
+    try:
+        frames = await browser.list_frames()
+    except browser.BrowserError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return JSONResponse({"frames": frames})
 
 
 @app.get("/api/snapshots")
@@ -196,16 +234,20 @@ async def api_snapshots() -> JSONResponse:
     return JSONResponse({"snapshots": entries})
 
 
-@app.get("/api/download/{run_name}/{filename}")
-async def api_download(run_name: str, filename: str) -> FileResponse:
+@app.get("/api/download/{run_name}/{file_path:path}")
+async def api_download(run_name: str, file_path: str) -> FileResponse:
     """Download a single file from a snapshot directory.
 
-    Strict segment validation + resolve-within-base guards against traversal.
+    ``file_path`` may be nested (e.g. ``frames/001_widget.html``). Strict
+    per-segment validation + resolve-within-base guards against traversal.
     """
-    if _bad_segment(run_name) or _bad_segment(filename):
+    if _bad_segment(run_name):
+        raise HTTPException(status_code=400, detail="Invalid path.")
+    segments = [seg for seg in file_path.replace("\\", "/").split("/") if seg != ""]
+    if not segments or any(_bad_segment(seg) for seg in segments):
         raise HTTPException(status_code=400, detail="Invalid path.")
     base = get_output_dir().resolve()
-    target = (base / run_name / filename).resolve()
+    target = base.joinpath(run_name, *segments).resolve()
     try:
         target.relative_to(base)
     except ValueError:
@@ -216,8 +258,10 @@ async def api_download(run_name: str, filename: str) -> FileResponse:
         ".html": "text/html",
         ".png": "image/png",
         ".json": "application/json",
+        ".har": "application/json",
+        ".jsonl": "application/jsonl",
     }.get(target.suffix.lower(), "application/octet-stream")
-    return FileResponse(str(target), media_type=media, filename=filename)
+    return FileResponse(str(target), media_type=media, filename=target.name)
 
 
 @app.post("/api/close")

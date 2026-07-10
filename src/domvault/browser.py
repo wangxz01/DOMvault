@@ -24,6 +24,8 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from .collectors import Collector
+
 BrowserKind = Literal["chromium", "firefox", "webkit"]
 
 # A module-level holder keeps everything on the single asyncio event loop that
@@ -42,6 +44,10 @@ class _Session:
 
 
 _session = _Session()
+
+# Bounded buffer of network + console events for the current context. Reset on
+# every new context. Read by the server at save time.
+_collector = Collector()
 
 
 class BrowserError(RuntimeError):
@@ -108,11 +114,16 @@ async def _ensure_started(
             _session.context = await _session.browser.new_context(**ctx_kwargs)
         except PlaywrightError as exc:
             raise BrowserError(f"Could not create browser context: {exc}") from exc
+        # Fresh context -> fresh capture. Attach network listeners now, before
+        # any navigation, so we don't miss the first requests.
+        _collector.reset()
+        _collector.attach_context(_session.context)
 
     # Create page if missing (or closed by the user).
     if _session.page is None or _session.page.is_closed():
         _session.page = await _session.context.new_page()
         _session.page.on("close", _on_page_closed)
+        _collector.attach_page(_session.page)
 
 
 def _on_page_closed() -> None:
@@ -226,6 +237,53 @@ async def current_storage_state() -> dict:
         return await _session.context.storage_state()
     except PlaywrightError as exc:
         raise BrowserError(f"Could not read storage state: {exc}") from exc
+
+
+def get_collector() -> Collector:
+    """Return the shared network/console collector for the current context."""
+    return _collector
+
+
+async def list_frames() -> list[dict]:
+    """Return metadata for every frame on the current page (main + iframes)."""
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    page = _session.page
+    out = []
+    for idx, fr in enumerate(page.frames):
+        out.append({
+            "index": idx,
+            "name": fr.name,
+            "url": fr.url,
+            "is_main": fr == page.main_frame,
+        })
+    return out
+
+
+async def frame_contents() -> list[dict]:
+    """Return the rendered HTML of every frame (main + iframes).
+
+    Cross-origin frames are accessible because Playwright drives the browser.
+    A frame whose HTML cannot be read (e.g. detached) yields ``html: None``.
+    """
+    if not _session.open or _session.page is None:
+        raise BrowserError("No browser session is open. Open a URL first.")
+    page = _session.page
+    out = []
+    for idx, fr in enumerate(page.frames):
+        html: str | None = None
+        try:
+            html = await fr.content()
+        except PlaywrightError:
+            html = None
+        out.append({
+            "index": idx,
+            "name": fr.name,
+            "url": fr.url,
+            "is_main": fr == page.main_frame,
+            "html": html,
+        })
+    return out
 
 
 async def close() -> None:

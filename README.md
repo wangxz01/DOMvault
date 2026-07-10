@@ -93,7 +93,12 @@ saved_html/
     ├── page.html              # rendered DOM
     ├── screenshot.png         # full-page screenshot
     ├── storage_state.json     # cookies + localStorage (reloadable)
-    └── metadata.json          # url, title, saved_at, file list
+    ├── frames.json            # index of every frame on the page
+    ├── frames/                # one HTML file per iframe (cross-origin too)
+    │   └── 001_inner.html
+    ├── network.jsonl          # request/response summaries, one JSON per line
+    ├── console.log            # console messages + page errors
+    └── metadata.json          # url, title, saved_at, file list, counts
 ```
 
 You can pass an optional snapshot name; otherwise the directory is named

@@ -129,7 +129,7 @@
       <button id="saveBtn" class="btn-save" type="button" disabled>Save snapshot</button>
       <button id="closeBtn" class="btn-ghost" type="button" disabled>Close browser</button>
     </div>
-    <p class="hint">Saves the current rendered HTML, a full-page screenshot, the storage state (cookies + localStorage), and <code>metadata.json</code> into its own directory.</p>
+    <p class="hint">Saves the rendered HTML, a full-page screenshot, storage state, frame/iframe HTML, network + console logs, and <code>metadata.json</code> into its own directory.</p>
     <div id="result" class="result hidden" style="margin-top:14px"></div>
   </section>
 
@@ -225,24 +225,49 @@
   }
 
   function renderResult(payload) {
-    const files = payload.files || {};
     const dl = payload.downloads || {};
+    const counts = payload.counts || {};
     const meta = payload.metadata || {};
-    const links = [];
-    if (dl.html) links.push('<a href="' + dl.html + '" target="_blank">page.html</a>');
-    if (dl.screenshot) links.push('<a href="' + dl.screenshot + '" target="_blank">screenshot.png</a>');
-    if (dl.storage_state) links.push('<a href="' + dl.storage_state + '" target="_blank">storage_state.json</a>');
-    if (dl.metadata) links.push('<a href="' + dl.metadata + '" target="_blank">metadata.json</a>');
+    const LABELS = { html: "page.html", screenshot: "screenshot.png", storage_state: "storage_state.json",
+                     frames: "frames.json", network: "network.jsonl", console: "console.log",
+                     metadata: "metadata.json" };
+    const links = Object.keys(LABELS)
+      .filter((k) => dl[k])
+      .map((k) => '<a href="' + dl[k] + '" target="_blank">' + LABELS[k] + '</a>');
 
-    let html =
-      '<div class="run">' + escapeHtml(payload.run_dir) + '</div>' +
-      '<div class="meta">Saved <strong>' + escapeHtml(payload.title || "(no title)") + '</strong> &mdash; ' + escapeHtml(payload.url) +
-      (meta.saved_at ? ' &middot; ' + escapeHtml(isoShort(meta.saved_at)) : '') + '</div>';
+    const parts = [];
+    parts.push('<div class="run">' + escapeHtml(payload.run_dir) + '</div>');
+    parts.push('<div class="meta">Saved <strong>' + escapeHtml(payload.title || "(no title)") +
+      '</strong> &mdash; ' + escapeHtml(payload.url) +
+      (meta.saved_at ? ' &middot; ' + escapeHtml(isoShort(meta.saved_at)) : '') + '</div>');
+
+    // capture counts
+    const cBits = [];
+    if (counts.frames != null) cBits.push(counts.frames + ' frame' + (counts.frames === 1 ? '' : 's'));
+    if (counts.network != null) cBits.push(counts.network + ' network events');
+    if (counts.console != null) cBits.push(counts.console + ' console msgs');
+    if (cBits.length) parts.push('<div class="meta">Captured: ' + cBits.join(' · ') + '</div>');
+
     if (dl.screenshot) {
-      html += '<img class="thumb" src="' + dl.screenshot + '" alt="screenshot" />';
+      parts.push('<img class="thumb" src="' + dl.screenshot + '" alt="screenshot" />');
     }
-    html += '<div class="dl">' + links.join("") + '</div>';
-    resultEl.innerHTML = html;
+
+    // iframe list
+    const frames = payload.frames || [];
+    const iframes = frames.filter((f) => !f.is_main && f.html_file);
+    if (iframes.length) {
+      const items = iframes.map((f) => {
+        const href = "/api/download/" + encodeURIComponent(payload.run_dir) + "/" + f.html_file;
+        const label = f.name ? escapeHtml(f.name) : "frame " + f.index;
+        return '<div class="snap-item"><span class="name">' + label + '</span>' +
+               '<span class="info">' + escapeHtml(f.url || "") +
+               ' &middot; <a href="' + href + '" target="_blank">' + escapeHtml(f.html_file) + '</a></span></div>';
+      });
+      parts.push('<div class="meta" style="margin-top:8px">Iframes:</div><div style="margin-top:4px">' + items.join("") + '</div>');
+    }
+
+    parts.push('<div class="dl">' + links.join("") + '</div>');
+    resultEl.innerHTML = parts.join("");
     resultEl.classList.remove("hidden");
   }
 
@@ -288,12 +313,20 @@
         const name = escapeHtml(s.name);
         const title = m.title ? escapeHtml(m.title) : "";
         const url = m.url ? '<span class="info">' + escapeHtml(m.url) + (title ? ' &mdash; ' + title : '') + '</span>' : '';
-        const links = [];
-        links.push('<a href="/api/download/' + encodeURIComponent(s.name) + '/page.html" target="_blank">html</a>');
-        if (m.screenshot_file) links.push('<a href="/api/download/' + encodeURIComponent(s.name) + '/screenshot.png" target="_blank">screenshot</a>');
-        if (m.storage_state_file) links.push('<a href="/api/download/' + encodeURIComponent(s.name) + '/storage_state.json" target="_blank">state</a>');
+        const pfx = "/api/download/" + encodeURIComponent(s.name) + "/";
+        const links = ['<a href="' + pfx + 'page.html" target="_blank">html</a>'];
+        if (m.screenshot_file) links.push('<a href="' + pfx + 'screenshot.png" target="_blank">screenshot</a>');
+        if (m.frames_file) links.push('<a href="' + pfx + 'frames.json" target="_blank">frames</a>');
+        if (m.network_file) links.push('<a href="' + pfx + 'network.jsonl" target="_blank">network</a>');
+        if (m.console_file) links.push('<a href="' + pfx + 'console.log" target="_blank">console</a>');
+        if (m.storage_state_file) links.push('<a href="' + pfx + 'storage_state.json" target="_blank">state</a>');
+        const cBits = [];
+        if (m.frame_count) cBits.push(m.frame_count + ' frame' + (m.frame_count === 1 ? '' : 's'));
+        if (m.network_event_count) cBits.push(m.network_event_count + ' net');
+        if (m.console_event_count) cBits.push(m.console_event_count + ' console');
+        const counts = cBits.length ? '<span class="info"> &middot; ' + cBits.join(' · ') + '</span>' : '';
         return '<div class="snap-item"><div class="name">' + name + '</div>' + url +
-               '<div class="info">' + links.join(" · ") + '</div></div>';
+               '<div class="info">' + links.join(" · ") + counts + '</div></div>';
       }).join("");
     } catch { /* ignore */ }
   }

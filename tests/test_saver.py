@@ -21,6 +21,9 @@ from domvault.saver import (
     sanitize_custom_name,
     save_snapshot,
     timestamp,
+    write_console_log,
+    write_frames,
+    write_network_jsonl,
 )
 
 
@@ -270,3 +273,112 @@ class TestSaveSnapshot:
                 None,  # type: ignore[arg-type]
                 url="https://example.com", title="t", out_dir=tmp_path,
             )
+
+
+# --- write_frames --------------------------------------------------------
+
+class TestWriteFrames:
+    def test_writes_frames_json_and_iframes(self, tmp_path: Path):
+        frames = [
+            {"index": 0, "name": "", "url": "https://example.com", "is_main": True, "html": "<main/>"},
+            {"index": 1, "name": "ad", "url": "https://ads.example.com/x", "is_main": False, "html": "<iframe-ad/>"},
+            {"index": 2, "name": "", "url": "https://other.example.org", "is_main": False, "html": "<other/>"},
+        ]
+        index = write_frames(tmp_path, frames)
+        # frames.json lists all frames
+        data = json.loads((tmp_path / "frames.json").read_text(encoding="utf-8"))
+        assert len(data["frames"]) == 3
+        # main frame has no separate html file
+        assert index[0]["html_file"] is None
+        assert index[0]["is_main"] is True
+        # non-main frames written under frames/
+        assert index[1]["html_file"] == "frames/001_ad.html"
+        assert index[2]["html_file"].startswith("frames/002_")
+        assert (tmp_path / "frames" / "001_ad.html").read_text(encoding="utf-8") == "<iframe-ad/>"
+
+    def test_main_frame_html_not_written(self, tmp_path: Path):
+        write_frames(tmp_path, [{"index": 0, "name": "", "url": "u", "is_main": True, "html": "<x/>"}])
+        assert not (tmp_path / "frames").is_dir()  # no iframe files at all
+
+    def test_empty_frames(self, tmp_path: Path):
+        index = write_frames(tmp_path, [])
+        assert index == []
+        assert json.loads((tmp_path / "frames.json").read_text(encoding="utf-8")) == {"frames": []}
+
+
+# --- write_network_jsonl -------------------------------------------------
+
+class TestWriteNetworkJsonl:
+    def test_writes_one_json_per_line(self, tmp_path: Path):
+        events = [
+            {"kind": "request", "url": "https://a", "method": "GET"},
+            {"kind": "response", "url": "https://a", "status": 200},
+        ]
+        count = write_network_jsonl(tmp_path, events)
+        assert count == 2
+        lines = (tmp_path / "network.jsonl").read_text(encoding="utf-8").strip().split("\n")
+        assert json.loads(lines[0])["kind"] == "request"
+        assert json.loads(lines[1])["status"] == 200
+
+    def test_skips_non_serializable(self, tmp_path: Path):
+        count = write_network_jsonl(tmp_path, [{"ok": 1}, {"bad": object()}])  # object() not serializable by default? it is -> "{}"
+        # default=str makes object() serializable, so both pass through
+        assert count == 2
+
+    def test_none_events(self, tmp_path: Path):
+        assert write_network_jsonl(tmp_path, None) == 0
+        assert (tmp_path / "network.jsonl").read_text(encoding="utf-8") == ""
+
+
+# --- write_console_log ---------------------------------------------------
+
+class TestWriteConsoleLog:
+    def test_format(self, tmp_path: Path):
+        events = [{"ts": "2026-07-10T00:00:00.000", "level": "error", "text": "boom"}]
+        write_console_log(tmp_path, events)
+        line = (tmp_path / "console.log").read_text(encoding="utf-8").strip()
+        assert line == "[2026-07-10T00:00:00.000] [ERROR] boom"
+
+    def test_none_events(self, tmp_path: Path):
+        assert write_console_log(tmp_path, None) == 0
+
+
+# --- save_snapshot with V0.3 artifacts -----------------------------------
+
+class TestSaveSnapshotV03:
+    def test_writes_frames_network_console(self, tmp_path: Path):
+        run_dir, meta = save_snapshot(
+            "<html><body><h1>main</h1></body></html>",
+            url="https://example.com",
+            title="Example",
+            out_dir=tmp_path,
+            frames=[
+                {"index": 0, "name": "", "url": "https://example.com", "is_main": True, "html": "<html><body><h1>main</h1></body></html>"},
+                {"index": 1, "name": "widget", "url": "https://widget.example.com", "is_main": False, "html": "<p>iframe content</p>"},
+            ],
+            network_events=[{"kind": "request", "url": "https://example.com", "method": "GET"}],
+            console_events=[{"ts": "2026-07-10T00:00:00", "level": "log", "text": "hi"}],
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert (run_dir / "frames.json").is_file()
+        assert (run_dir / "frames" / "001_widget.html").is_file()
+        assert (run_dir / "network.jsonl").is_file()
+        assert (run_dir / "console.log").is_file()
+        assert meta["frame_count"] == 2
+        assert meta["network_event_count"] == 1
+        assert meta["console_event_count"] == 1
+        assert meta["frames_file"] == "frames.json"
+        assert meta["network_file"] == "network.jsonl"
+        assert meta["console_file"] == "console.log"
+
+    def test_no_frames_no_artifacts(self, tmp_path: Path):
+        run_dir, meta = save_snapshot(
+            "<html></html>", url="https://example.com", title="t", out_dir=tmp_path,
+            when=datetime.datetime(2026, 7, 9, 21, 30, 0),
+        )
+        assert not (run_dir / "frames.json").exists()
+        assert not (run_dir / "network.jsonl").exists()
+        assert not (run_dir / "console.log").exists()
+        assert meta["frame_count"] == 0
+        assert meta["network_event_count"] == 0
+        assert meta["frames_file"] is None
